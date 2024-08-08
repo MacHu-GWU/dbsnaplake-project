@@ -13,6 +13,8 @@ from dbsnaplake.tests.mock_aws import BaseMockAwsTest
 
 
 class Test(BaseMockAwsTest):
+    use_mock: bool = True
+
     def test_write_parquet_to_s3(self):
         df = pl.DataFrame({"id": [1, 2, 3], "name": ["alice", "bob", "cathy"]})
         s3path = S3Path(f"s3://{self.bucket}/1.parquet")

@@ -42,15 +42,17 @@ def test_get_s3dir_partition():
 
 
 class Test(BaseMockAwsTest):
+    use_mock: bool = True
+
     def test_get_partitions(self):
         # --- case 1
         s3dir_root = S3Path(f"s3://{self.bucket}/root1/")
-        (s3dir_root / "year=2021/month=01/1.json").write_text("")
-        (s3dir_root / "year=2021/month=02/1.json").write_text("")
-        (s3dir_root / "year=2021/month=03/1.json").write_text("")
-        (s3dir_root / "year=2022/month=01/1.json").write_text("")
-        (s3dir_root / "year=2022/month=02/1.json").write_text("")
-        (s3dir_root / "year=2022/month=03/1.json").write_text("")
+        (s3dir_root / "year=2021/month=01/1.json").write_text("", bsm=self.s3_client)
+        (s3dir_root / "year=2021/month=02/1.json").write_text("", bsm=self.s3_client)
+        (s3dir_root / "year=2021/month=03/1.json").write_text("", bsm=self.s3_client)
+        (s3dir_root / "year=2022/month=01/1.json").write_text("", bsm=self.s3_client)
+        (s3dir_root / "year=2022/month=02/1.json").write_text("", bsm=self.s3_client)
+        (s3dir_root / "year=2022/month=03/1.json").write_text("", bsm=self.s3_client)
         partitions = get_partitions(
             s3_client=self.s3_client,
             s3dir_root=s3dir_root,

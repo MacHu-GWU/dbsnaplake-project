@@ -83,6 +83,8 @@ def test_read_write_performance():
 
 
 class TestManifestFile(BaseMockAwsTest):
+    use_mock: bool = True
+
     def test(self):
         # make dummy manifest file
         n_file = 1000
