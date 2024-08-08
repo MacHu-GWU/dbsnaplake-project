@@ -25,7 +25,7 @@ def test_calculate_merge_plan():
     for file_group in file_groups:
         size_list = [file[1] for file in file_group]
         total_size = sum(size_list)
-        print(total_size, size_list)
+        # print(total_size, size_list)
 
     files = list()
     i = 0
@@ -36,7 +36,7 @@ def test_calculate_merge_plan():
     for file_group in file_groups:
         size_list = [file[1] for file in file_group]
         total_size = sum(size_list)
-        print(total_size, size_list)
+        # print(total_size, size_list)
 
 
 def test_harmonize_schemas():

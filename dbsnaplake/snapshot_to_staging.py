@@ -6,7 +6,6 @@ Snapshot Data File to Staging Data File.
 """
 
 import typing as T
-import json
 import uuid
 import dataclasses
 
@@ -20,141 +19,33 @@ from s3pathlib import S3Path
 
 from .typehint import T_EXTRACTOR, T_OPTIONAL_KWARGS
 from .constants import (
-    S3_METADATA_KEY_N_RECORDS,
+    S3_METADATA_KEY_N_RECORD,
 )
 from .logger import dummy_logger
-from .compaction import File, FileGroup, calculate_merge_plan
 from .polars_utils import write_parquet_to_s3, group_by_partition
+from .utils import repr_data_size
+from .manifest import DataFile, ManifestFile
+from .partition import Partition
 
 if T.TYPE_CHECKING:  # pragma: no cover
     from mypy_boto3_s3.client import S3Client
 
 
-@dataclasses.dataclass
-class SnapshotDataFile:
-    """
-    Represent a Snapshot Data File. For example,
-
-    - AWS RDS Export to S3: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ExportSnapshot.html#USER_ExportSnapshot.FileNames
-    - AWS DynamoDB Export to S3: https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/S3DataExport.Output.html
-    """
-
-    uri: str = dataclasses.field()
-    size: T.Optional[int] = dataclasses.field(default=None)
-    n_records: T.Optional[int] = dataclasses.field(default=None)
-
-    @property
-    def s3path(self) -> S3Path:
-        return S3Path.from_s3_uri(self.uri)
-
-
-T_SNAPSHOT_DATA_FILE = T.TypeVar("T_SNAPSHOT_DATA_FILE", bound=SnapshotDataFile)
-
-
-@dataclasses.dataclass
-class ManifestFile:
-    """
-    Manifest file is an uncompressed json line file. Each line is a
-    :class:`SnapshotDataFile` object.
-    """
-
-    uri: str = dataclasses.field()
-    snapshot_data_file_list: T.List[T_SNAPSHOT_DATA_FILE] = dataclasses.field(
-        default_factory=list
-    )
-
-    @property
-    def s3path(self) -> S3Path:
-        return S3Path.from_s3_uri(self.uri)
-
-    def write(
-        self,
-        s3_client: "S3Client",
-    ):
-        """
-        Write the manifest file to S3.
-        """
-        lines = [
-            json.dumps(dataclasses.asdict(snapshot_data_file))
-            for snapshot_data_file in self.snapshot_data_file_list
-        ]
-        return self.s3path.write_text(
-            "\n".join(lines),
-            content_type="application/json",
-            bsm=s3_client,
-        )
-
-    @classmethod
-    def read(cls, uri: str, s3_client: "S3Client"):
-        """
-        Read the manifest file from S3.
-        """
-        s3path = S3Path.from_s3_uri(uri)
-        return cls(
-            uri=uri,
-            snapshot_data_file_list=[
-                SnapshotDataFile(**json.loads(line))
-                for line in s3path.read_text(bsm=s3_client).splitlines()
-            ],
-        )
-
-@dataclasses.dataclass
-class SnapshotToStagingTask:
+class SnapshotDataFile(DataFile):
     pass
 
 
-def batch_read_snapshot_data_file(*args, **kwargs):
+class StagingDataFile(DataFile):
+    pass
+
+
+def batch_read_snapshot_data_file(
+    manifest_file: ManifestFile,
+    *args,
+    **kwargs,
+):
     """ """
     raise NotImplementedError
-
-
-@dataclasses.dataclass
-class StagingDataFile:
-    """
-    Represent a Staging Data File. One :class:`BaseSnapshotDataFile` can become
-    many :class:`StagingDataFile` based on the number of partition keys.
-
-    :param uri: the S3 URI of the Staging Data File.
-    :param n_records: the number of records in the Staging Data File.
-    """
-
-    uri: str = dataclasses.field()
-    n_records: T.Optional[int] = dataclasses.field(default=None)
-
-    @property
-    def s3path(self) -> S3Path:
-        return S3Path.from_s3_uri(self.uri)
-
-    def write_parquet(
-        self,
-        df: pl.DataFrame,
-        s3_client: "S3Client",
-        polars_write_parquet_kwargs: T_OPTIONAL_KWARGS = None,
-        s3pathlib_write_bytes_kwargs: T_OPTIONAL_KWARGS = None,
-    ):
-        """
-        Write the DataFrame to the given S3Path as a Parquet file, also attach
-        additional information related to the Snapshot Data File.
-
-        It is a wrapper of the write_parquet_to_s3 function, make the final code shorter.
-        """
-        if s3pathlib_write_bytes_kwargs is None:
-            s3pathlib_write_bytes_kwargs = {}
-        s3pathlib_write_bytes_kwargs["content_type"] = "application/x-parquet"
-        more_metadata = {
-            S3_METADATA_KEY_N_RECORDS: str(df.shape[0]),
-        }
-        if "metadata" in s3pathlib_write_bytes_kwargs:
-            s3pathlib_write_bytes_kwargs["metadata"].update(more_metadata)
-        else:
-            s3pathlib_write_bytes_kwargs["metadata"] = more_metadata
-        return write_parquet_to_s3(
-            df=df,
-            s3path=self.s3path,
-            s3_client=s3_client,
-            polars_write_parquet_kwargs=polars_write_parquet_kwargs,
-            s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
-        )
 
 
 @dataclasses.dataclass
@@ -322,7 +213,7 @@ def process_snapshot_data_file(
             logger.info(f"  preview at: {s3path.console_url}")
             staging_data_file = StagingDataFile(
                 uri=s3path.uri,
-                n_records=sub_df.shape[0],
+                n_record=sub_df.shape[0],
             )
             staging_data_file.write_parquet(
                 df=sub_df,
@@ -347,7 +238,7 @@ def process_snapshot_data_file(
         logger.info(f"  preview at: {s3path.console_url}")
         staging_data_file = StagingDataFile(
             uri=s3path.uri,
-            n_records=df.shape[0],
+            n_record=df.shape[0],
         )
         staging_data_file.write_parquet(
             df=df,
@@ -357,4 +248,13 @@ def process_snapshot_data_file(
         )
         staging_data_file_list.append(staging_data_file)
 
+    partition = Partition.from_uri(
+        s3uri=s3dir_staging.uri, s3uri_root=s3dir_staging.uri
+    )
+    s3path_manifest = partition.s3dir_manifest.joinpath(f"{filename}.ndjson.gz")
+    manifest_file = ManifestFile(
+        uri=s3path_manifest.uri,
+        data_file_list=staging_data_file_list,
+    )
+    manifest_file.write(s3_client=s3_client)
     return staging_data_file_list

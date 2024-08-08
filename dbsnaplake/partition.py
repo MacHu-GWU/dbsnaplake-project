@@ -34,14 +34,31 @@ class Partition:
     :param data: A dictionary of partition data. Note that the value is always
         a string.
         For example: {"year": "2021", "month": "01", "day": "01"}
+
+    Within each partition folder, there is a ``.dbsnaplake_manifest`` folder
+    that contains some manifest files that stores metadata of the data files
+    in this partition. So a partition folder should look like::
+
+        s3://bucket/folder/year=2021/month=01/day=01/.dbsnaplake_manifest/1.manifest.json
+        s3://bucket/folder/year=2021/month=01/day=01/.dbsnaplake_manifest/2.manifest.json
+        s3://bucket/folder/year=2021/month=01/day=01/.dbsnaplake_manifest/3.manifest.json
+        s3://bucket/folder/year=2021/month=01/day=01/data1.json
+        s3://bucket/folder/year=2021/month=01/day=01/data2.json
+        s3://bucket/folder/year=2021/month=01/day=01/data3.json
+        s3://bucket/folder/year=2021/month=01/day=01/...
+        s3://bucket/folder/year=2021/month=01/day=01/data100.json
     """
 
     uri: str = dataclasses.field()
     data: T.Dict[str, str] = dataclasses.field()
 
     @property
-    def s3path(self) -> S3Path:
+    def s3dir(self) -> S3Path:
         return S3Path.from_s3_uri(self.uri)
+
+    @property
+    def s3dir_manifest(self) -> S3Path:
+        return self.s3dir.joinpath(".dbsnaplake_manifest").to_dir()
 
     @classmethod
     def from_uri(
@@ -56,6 +73,17 @@ class Partition:
         s3dir_root = S3Path.from_s3_uri(s3uri_root)
         data = extract_partition_data(s3dir_root, s3dir)
         return cls(uri=s3uri, data=data)
+
+    def list_parquet_files(
+        self,
+        ext: str = ".parquet",
+    ) -> T.List[S3Path]:  # pragma: no cover
+        """
+        List all parquet files in the partition.
+        """
+        return (
+            self.s3dir.iter_objects().filter(lambda x: x.basename.endswith(ext)).all()
+        )
 
 
 def extract_partition_data(
