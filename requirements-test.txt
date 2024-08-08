@@ -1,0 +1,7 @@
+# This requirements file should only include dependencies for testing
+pytest                                  # test framework
+pytest-cov                              # coverage test
+moto>=5.0.0,<6.0.0
+rich>=13.4.2,<14.0.0
+vislog>=0.1.2,<1.0.0
+boto_session_manager>=1.7.2,<2.0.0
