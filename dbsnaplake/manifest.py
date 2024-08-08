@@ -1,15 +1,25 @@
 # -*- coding: utf-8 -*-
 
 """
-This module defines the abstraction of the transformation process from
-Snapshot Data File to Staging Data File.
+In ETL (Extract, Transform, Load) pipelines, it's a common practice to group
+numerous files into appropriately sized batches, each forming a distinct task.
+This approach optimizes processing efficiency and resource utilization.
+
+However, this method reqiures an effective mechanism for storing and
+retrieving metadata. Ideally, we should be able to access the metadata for
+an entire task in a single operation, eliminating the need to read each file
+individually. This approach significantly reduces I/O operations and improves
+overall performance.
+
+This module implements an abstraction layer to achieve this functionality.
+It provides a streamlined interface for grouping files, managing their associated
+metadata, and enabling efficient batch processing in ETL workflows.
 """
 
 import typing as T
 import io
 import gzip
 import json
-import uuid
 import dataclasses
 
 import polars as pl
@@ -21,30 +31,53 @@ except ImportError:  # pragma: no cover
     pass
 from s3pathlib import S3Path
 
-from .typehint import T_EXTRACTOR, T_OPTIONAL_KWARGS
+from .typehint import T_RECORD, T_OPTIONAL_KWARGS
 from .constants import (
-    S3_METADATA_KEY_N_RECORDS,
+    S3_METADATA_KEY_SIZE,
+    S3_METADATA_KEY_N_RECORD,
 )
-from .logger import dummy_logger
-from .compaction import File, FileGroup, calculate_merge_plan
-from .polars_utils import write_parquet_to_s3, group_by_partition
+from .compaction import calculate_merge_plan
+from .polars_utils import write_parquet_to_s3
 
 if T.TYPE_CHECKING:  # pragma: no cover
     from mypy_boto3_s3.client import S3Client
 
 
-@dataclasses.dataclass(slots=True)
-class SnapshotDataFile:
-    """
-    Represent a Snapshot Data File. For example,
+def write_ndjson_v1(records: T.List[T_RECORD]) -> bytes:
+    lines = [json.dumps(record) for record in records]
+    return gzip.compress("\n".join(lines).encode("utf-8"))
 
-    - AWS RDS Export to S3: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ExportSnapshot.html#USER_ExportSnapshot.FileNames
-    - AWS DynamoDB Export to S3: https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/S3DataExport.Output.html
+
+def write_ndjson_v2(records: T.List[T_RECORD]) -> bytes:
+    df = pl.DataFrame(records)
+    buffer = io.BytesIO()
+    df.write_ndjson(buffer)
+    return gzip.compress(buffer.getvalue())
+
+
+def read_ndjson_v1(b: bytes) -> T.List[T_RECORD]:
+    lines = gzip.decompress(b).decode("utf-8").splitlines()
+    return [json.loads(line) for line in lines]
+
+
+def read_ndjson_v2(b: bytes) -> T.List[T_RECORD]:
+    df = pl.read_ndjson(gzip.decompress(b))
+    return df.to_dicts()
+
+
+read_ndjson = read_ndjson_v2
+write_ndjson = write_ndjson_v2
+
+
+@dataclasses.dataclass(slots=True)
+class DataFile:
+    """
+    A file is a unit of data that can be processed independently.
     """
 
     uri: str = dataclasses.field()
     size: T.Optional[int] = dataclasses.field(default=None)
-    n_records: T.Optional[int] = dataclasses.field(default=None)
+    n_record: T.Optional[int] = dataclasses.field(default=None)
 
     @property
     def s3path(self) -> S3Path:
@@ -54,151 +87,130 @@ class SnapshotDataFile:
         return {
             "uri": self.uri,
             "size": self.size,
-            "n_records": self.n_records,
+            "n_record": self.n_record,
         }
 
     @classmethod
     def from_dict(cls, dct: T.Dict[str, T.Any]):
         return cls(**dct)
 
+    def write_parquet(
+        self,
+        df: pl.DataFrame,
+        s3_client: "S3Client",
+        polars_write_parquet_kwargs: T_OPTIONAL_KWARGS = None,
+        s3pathlib_write_bytes_kwargs: T_OPTIONAL_KWARGS = None,
+    ):
+        """
+        Write the DataFrame to the given S3Path as a Parquet file, also attach
+        additional information related to the Snapshot Data File.
 
-T_SNAPSHOT_DATA_FILE = T.TypeVar("T_SNAPSHOT_DATA_FILE", bound=SnapshotDataFile)
+        It is a wrapper of the write_parquet_to_s3 function, make the final code shorter.
+        """
+        if s3pathlib_write_bytes_kwargs is None:
+            s3pathlib_write_bytes_kwargs = {}
+        s3pathlib_write_bytes_kwargs["content_type"] = "application/x-parquet"
+        more_metadata = {
+            S3_METADATA_KEY_N_RECORD: str(df.shape[0]),
+        }
+        if "metadata" in s3pathlib_write_bytes_kwargs:
+            s3pathlib_write_bytes_kwargs["metadata"].update(more_metadata)
+        else:
+            s3pathlib_write_bytes_kwargs["metadata"] = more_metadata
+        return write_parquet_to_s3(
+            df=df,
+            s3path=self.s3path,
+            s3_client=s3_client,
+            polars_write_parquet_kwargs=polars_write_parquet_kwargs,
+            s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
+        )
 
 
-@dataclasses.dataclass
-class SnapshotManifestFile:
-    """
-    Manifest file is an uncompressed json line file. Each line is a
-    :class:`SnapshotDataFile` object.
-    """
+T_DATA_FILE = T.TypeVar("T_DATA_FILE", bound=DataFile)
 
+
+@dataclasses.dataclass(slots=True)
+class ManifestFile:
     uri: str = dataclasses.field()
-    snapshot_data_file_list: T.List[T_SNAPSHOT_DATA_FILE] = dataclasses.field(
-        default_factory=list
-    )
+    size: T.Optional[int] = dataclasses.field(default=None)
+    n_record: T.Optional[int] = dataclasses.field(default=None)
+    data_file_list: T.List[T_DATA_FILE] = dataclasses.field(default_factory=list)
 
     @property
     def s3path(self) -> S3Path:
         return S3Path.from_s3_uri(self.uri)
 
-    def write_v1(
-        self,
-        s3_client: "S3Client",
-    ):
+    def write(self, s3_client: "S3Client"):
         """
         Write the manifest file to S3.
         """
-        lines = [
-            json.dumps(snapshot_data_file.to_dict())
-            for snapshot_data_file in self.snapshot_data_file_list
-        ]
+        records = list()
+        size_list = list()
+        n_record_list = list()
+        for data_file in self.data_file_list:
+            records.append(data_file.to_dict())
+            size_list.append(data_file.size)
+            n_record_list.append(data_file.n_record)
+        metadata = {}
+        try:
+            size = sum(size_list)
+            self.size = size
+            metadata[S3_METADATA_KEY_SIZE] = str(size)
+        except:
+            pass
+        try:
+            n_record = sum(n_record_list)
+            self.n_record = n_record
+            metadata[S3_METADATA_KEY_N_RECORD] = str(n_record)
+        except:
+            pass
         return self.s3path.write_bytes(
-            gzip.compress("\n".join(lines).encode("utf-8")),
+            write_ndjson(records),
             content_type="application/json",
             content_encoding="gzip",
+            metadata=metadata,
             bsm=s3_client,
         )
-
-    def write_v2(
-        self,
-        s3_client: "S3Client",
-    ):
-        """
-        Write the manifest file to S3.
-        """
-        df = pl.DataFrame(
-            [
-                snapshot_data_file.to_dict()
-                for snapshot_data_file in self.snapshot_data_file_list
-            ]
-        )
-        buffer = io.BytesIO()
-        df.write_ndjson(buffer)
-        return self.s3path.write_bytes(
-            gzip.compress(buffer.getvalue()),
-            content_type="application/json",
-            content_encoding="gzip",
-            bsm=s3_client,
-        )
-
-    write = write_v2
 
     @classmethod
-    def read_v1(cls, uri: str, s3_client: "S3Client"):
+    def read(cls, uri: str, s3_client: "S3Client"):
         """
         Read the manifest file from S3.
         """
         s3path = S3Path.from_s3_uri(uri)
-        lines = (
-            gzip.decompress(s3path.read_bytes(bsm=s3_client))
-            .decode("utf-8")
-            .splitlines()
-        )
+        records = read_ndjson((s3path.read_bytes(bsm=s3_client)))
+        try:
+            size = int(s3path.metadata.get(S3_METADATA_KEY_SIZE))
+        except:
+            size = None
+        try:
+            n_record = int(s3path.metadata.get(S3_METADATA_KEY_N_RECORD))
+        except:
+            n_record = None
         return cls(
             uri=uri,
-            snapshot_data_file_list=[
-                SnapshotDataFile.from_dict(json.loads(line))
-                for line in gzip.decompress(s3path.read_bytes(bsm=s3_client))
-                .decode("utf-8")
-                .splitlines()
-            ],
+            size=size,
+            n_record=n_record,
+            data_file_list=[DataFile.from_dict(record) for record in records],
         )
-
-    @classmethod
-    def read_v2(cls, uri: str, s3_client: "S3Client"):
-        """
-        Read the manifest file from S3.
-        """
-        s3path = S3Path.from_s3_uri(uri)
-        df = pl.read_ndjson(gzip.decompress(s3path.read_bytes(bsm=s3_client)))
-        return cls(
-            uri=uri,
-            snapshot_data_file_list=[
-                SnapshotDataFile.from_dict(record) for record in df.to_dicts()
-            ],
-        )
-
-    read = read_v2
-
-    def figure_out_target_size(self) -> int: # pragma: no cover
-        # total_size = sum([
-        #     snapshot_data_file.size
-        #     for snapshot_data_file in self.snapshot_data_file_list
-        # ])
-        return 100 * 1000 * 1000  # 100 MB
 
     def group_files_into_tasks(
         self,
-        target_size: int = 100 * 1000 * 1000, ## 100 MB
-    ) -> T.List["SnapshotToStagingTask"]:
+        target_size: int = 100 * 1000 * 1000,  ## 100 MB
+    ) -> T.List[T.List["T_DATA_FILE"]]:
         """
         Group the snapshot data files into tasks.
         """
-        mapping = {
-            snapshot_data_file.uri: snapshot_data_file
-            for snapshot_data_file in self.snapshot_data_file_list
-        }
-
-        files = [
-            File(
-                id=snapshot_data_file.uri,
-                size=snapshot_data_file.size,
-            )
-            for snapshot_data_file in self.snapshot_data_file_list
-        ]
-        file_groups = calculate_merge_plan(target_size=target_size, files=files)
-        return [
-            SnapshotToStagingTask(
-                id=str(uuid.uuid4()),
-                snapshot_data_file_list=[mapping[file.id] for file in file_group.files],
-            )
-            for file_group in file_groups
-        ]
+        mapping = {data_file.uri: data_file for data_file in self.data_file_list}
+        files = [(data_file.uri, data_file.size) for data_file in self.data_file_list]
+        file_groups = calculate_merge_plan(files=files, target=target_size)
+        data_file_group_list = list()
+        for file_group in file_groups:
+            data_file_list = [
+                mapping[uri] for uri, size in file_group
+            ]
+            data_file_group_list.append(data_file_list)
+        return data_file_group_list
 
 
-@dataclasses.dataclass(slots=True)
-class SnapshotToStagingTask:
-    # fmt: off
-    id: str = dataclasses.field()
-    snapshot_data_file_list: T.List[SnapshotDataFile] = dataclasses.field(default_factory=list)
-    # fmt: on
+T_MANIFEST_FILE = T.TypeVar("T_MANIFEST_FILE", bound=ManifestFile)
