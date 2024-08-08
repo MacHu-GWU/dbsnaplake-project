@@ -6,7 +6,7 @@ import polars as pl
 from collections import deque
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class File:
     """
     Represent a file.
@@ -15,10 +15,8 @@ class File:
     id: str
     size: int
 
-    __slots__ = ["id", "size"]
 
-
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class FileGroup:
     """
     Represent a group of files.
