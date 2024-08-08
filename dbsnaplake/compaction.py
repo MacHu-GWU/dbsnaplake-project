@@ -6,6 +6,49 @@ import polars as pl
 from collections import deque
 
 
+T_FILE_SPEC = T.Tuple[str, int]
+
+def calculate_merge_plan(
+    files: T.List[T_FILE_SPEC],
+    target: int,
+) -> T.List[T.List[T_FILE_SPEC]]:
+    """
+    Given a list of :class:`File` and a target size, put them into groups,
+    so that each group has approximately the same size as the target size.
+    """
+    half_target_size = target // 2
+
+    files = deque(sorted(files, key=lambda x: [1]))
+    file_groups = list()
+    file_group = list()
+    file_group_size = 0
+
+    while 1:
+        # if no files left
+        if len(files) == 0:
+            if len(file_group):
+                file_groups.append(file_group)
+            break
+
+        remaining_size = half_target_size - file_group_size
+        # take the largest file
+        if remaining_size <= half_target_size:
+            file = files.popleft()
+        # take the smallest file
+        else:
+            file = files.pop()
+
+        file_group.append(file)
+        file_group_size += file[1]
+
+        if file_group_size >= target:
+            file_groups.append(file_group)
+            file_group = list()
+            file_group_size = 0
+
+    return file_groups
+
+
 @dataclasses.dataclass(slots=True)
 class File:
     """
@@ -29,45 +72,45 @@ class FileGroup:
         return sum([f.size for f in self.files])
 
 
-def calculate_merge_plan(
-    files: T.List[File],
-    target_size: int,
-) -> T.List[FileGroup]:
-    """
-    Given a list of :class:`File` and a target size, put them into groups,
-    so that each group has approximately the same size as the target size.
-    """
-    half_target_size = target_size // 2
-
-    files = deque(sorted(files, key=lambda x: x.size))
-    file_groups = list()
-    file_group = FileGroup()
-    file_group_size = 0
-
-    while 1:
-        # if no files left
-        if len(files) == 0:
-            if len(file_group.files):
-                file_groups.append(file_group)
-            break
-
-        remaining_size = target_size - file_group_size
-        # take the largest file
-        if remaining_size <= half_target_size:
-            file = files.popleft()
-        # take the smallest file
-        else:
-            file = files.pop()
-
-        file_group.files.append(file)
-        file_group_size += file.size
-
-        if file_group_size >= target_size:
-            file_groups.append(file_group)
-            file_group = FileGroup()
-            file_group_size = 0
-
-    return file_groups
+# def calculate_merge_plan(
+#     files: T.List[File],
+#     target_size: int,
+# ) -> T.List[FileGroup]:
+#     """
+#     Given a list of :class:`File` and a target size, put them into groups,
+#     so that each group has approximately the same size as the target size.
+#     """
+#     half_target_size = target_size // 2
+#
+#     files = deque(sorted(files, key=lambda x: x.size))
+#     file_groups = list()
+#     file_group = FileGroup()
+#     file_group_size = 0
+#
+#     while 1:
+#         # if no files left
+#         if len(files) == 0:
+#             if len(file_group.files):
+#                 file_groups.append(file_group)
+#             break
+#
+#         remaining_size = target_size - file_group_size
+#         # take the largest file
+#         if remaining_size <= half_target_size:
+#             file = files.popleft()
+#         # take the smallest file
+#         else:
+#             file = files.pop()
+#
+#         file_group.files.append(file)
+#         file_group_size += file.size
+#
+#         if file_group_size >= target_size:
+#             file_groups.append(file_group)
+#             file_group = FileGroup()
+#             file_group_size = 0
+#
+#     return file_groups
 
 
 def get_merged_schema(
