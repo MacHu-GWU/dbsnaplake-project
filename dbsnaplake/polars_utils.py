@@ -10,7 +10,8 @@ import io
 import polars as pl
 from s3pathlib import S3Path
 
-from .logger import dummy_logger
+from .typehint import T_OPTIONAL_KWARGS
+from .constants import S3_METADATA_KEY_N_RECORD
 from .partition import encode_hive_partition
 
 if T.TYPE_CHECKING:  # pragma: no cover
@@ -23,7 +24,7 @@ def write_parquet_to_s3(
     s3_client: "S3Client",
     polars_write_parquet_kwargs: T.Optional[T.Dict[str, T.Any]] = None,
     s3pathlib_write_bytes_kwargs: T.Optional[T.Dict[str, T.Any]] = None,
-):
+) -> int:
     """
     Write polars dataframe to AWS S3 as a parquet file.
 
@@ -36,6 +37,8 @@ def write_parquet_to_s3(
     :param s3pathlib_write_bytes_kwargs: Keyword arguments for
         ``s3path.write_bytes`` method. See
         https://s3pathlib.readthedocs.io/en/latest/s3pathlib/core/rw.html#s3pathlib.core.rw.ReadAndWriteAPIMixin.write_bytes
+
+    :return: The number of bytes written to S3, i.e., the size of the parquet file.
     """
     if polars_write_parquet_kwargs is None:
         polars_write_parquet_kwargs = {}
@@ -44,7 +47,43 @@ def write_parquet_to_s3(
 
     if s3pathlib_write_bytes_kwargs is None:
         s3pathlib_write_bytes_kwargs = {}
-    s3path.write_bytes(buffer.getvalue(), bsm=s3_client, **s3pathlib_write_bytes_kwargs)
+    s3pathlib_write_bytes_kwargs["content_type"] = "application/x-parquet"
+    b = buffer.getvalue()
+    s3path.write_bytes(b, bsm=s3_client, **s3pathlib_write_bytes_kwargs)
+    return len(b)
+
+
+def write_data_file(
+    df: pl.DataFrame,
+    s3path: S3Path,
+    s3_client: "S3Client",
+    polars_write_parquet_kwargs: T_OPTIONAL_KWARGS = None,
+    s3pathlib_write_bytes_kwargs: T_OPTIONAL_KWARGS = None,
+) -> int:
+    """
+    Write the DataFrame to the given S3Path as a Parquet file, also attach
+    additional information related to the Snapshot Data File.
+
+    It is a wrapper of the write_parquet_to_s3 function, make the final code shorter.
+
+    :return: The number of bytes written to S3, i.e., the size of the parquet file.
+    """
+    if s3pathlib_write_bytes_kwargs is None:
+        s3pathlib_write_bytes_kwargs = {}
+    more_metadata = {
+        S3_METADATA_KEY_N_RECORD: str(df.shape[0]),
+    }
+    if "metadata" in s3pathlib_write_bytes_kwargs:
+        s3pathlib_write_bytes_kwargs["metadata"].update(more_metadata)
+    else:
+        s3pathlib_write_bytes_kwargs["metadata"] = more_metadata
+    return write_parquet_to_s3(
+        df=df,
+        s3path=s3path,
+        s3_client=s3_client,
+        polars_write_parquet_kwargs=polars_write_parquet_kwargs,
+        s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
+    )
 
 
 def group_by_partition(

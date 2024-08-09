@@ -27,7 +27,7 @@ class Test(BaseMockAwsTest):
         df = pl.read_parquet(s3path.read_bytes(bsm=self.s3_client))
         assert df.shape == (3, 2)
 
-    def test_write_partitions(self):
+    def test_group_by_partition(self):
         n_tag = 5
         tags = [f"tag-{i}" for i in range(1, 1 + n_tag)]
         n_row = 1000
