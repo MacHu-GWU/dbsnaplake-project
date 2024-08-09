@@ -3,40 +3,11 @@
 import random
 
 import polars as pl
-from s3pathlib import S3Path
 
 from dbsnaplake.compaction import (
-    calculate_merge_plan,
     get_merged_schema,
     harmonize_schemas,
 )
-
-
-def test_calculate_merge_plan():
-    files = list()
-    i = 0
-    for _ in range(1, 90):
-        i += 1
-        files.append((f"f-{i}", random.randint(1, 5)))
-    for _ in range(10):
-        i += 1
-        files.append((f"f-{i}", random.randint(50, 100)))
-    file_groups = calculate_merge_plan(files, target=64)
-    for file_group in file_groups:
-        size_list = [file[1] for file in file_group]
-        total_size = sum(size_list)
-        # print(total_size, size_list)
-
-    files = list()
-    i = 0
-    for _ in range(1, 100):
-        i += 1
-        files.append((f"f-{i}", random.randint(32, 128)))
-    file_groups = calculate_merge_plan(files, target=64)
-    for file_group in file_groups:
-        size_list = [file[1] for file in file_group]
-        total_size = sum(size_list)
-        # print(total_size, size_list)
 
 
 def test_harmonize_schemas():
