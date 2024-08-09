@@ -16,27 +16,17 @@ try:
 except ImportError:  # pragma: no cover
     pass
 from s3pathlib import S3Path
+from s3manifesto.api import T_DATA_FILE, KeyEnum, ManifestFile
 
 from .typehint import T_EXTRACTOR, T_OPTIONAL_KWARGS
 from .constants import (
-    S3_METADATA_KEY_N_RECORD,
+    DBSNAPLAKE_MANIFEST_FOLDER,
 )
 from .logger import dummy_logger
-from .polars_utils import write_parquet_to_s3, group_by_partition
-from .utils import repr_data_size
-from .manifest import DataFile, ManifestFile
-from .partition import Partition
+from .polars_utils import write_data_file, group_by_partition
 
 if T.TYPE_CHECKING:  # pragma: no cover
     from mypy_boto3_s3.client import S3Client
-
-
-class SnapshotDataFile(DataFile):
-    pass
-
-
-class StagingDataFile(DataFile):
-    pass
 
 
 def batch_read_snapshot_data_file(
@@ -157,7 +147,7 @@ def process_snapshot_data_file(
     polars_write_parquet_kwargs: T_OPTIONAL_KWARGS = None,
     s3pathlib_write_bytes_kwargs: T_OPTIONAL_KWARGS = None,
     logger=dummy_logger,
-) -> T.List[StagingDataFile]:
+) -> T.List[T_DATA_FILE]:
     """
     Convert the Snapshot Data File to many Staging Data Files, based on the
     number of partition keys.
@@ -201,26 +191,33 @@ def process_snapshot_data_file(
         # Method 1, split df into sub_df based on partition keys and
         # write them to different partition (1 file per partition)
         # ----------------------------------------------------------------------
-        for sub_df, s3path in group_by_partition(
+        results = group_by_partition(
             df=df,
             s3dir=s3dir_staging,
             filename=filename,
             partition_keys=partition_keys,
             sort_by=[extract_update_time.alias],
-        ):
-            logger.info(f"Write to partition: {s3path.relative_to(s3dir_staging)}")
+        )
+        logger.info(f"Will write data to {len(results)} partitions ...")
+        for ith, (sub_df, s3path) in enumerate(results, start=1):
+            logger.info(
+                f"Write to {ith}th partition: {s3path.relative_to(s3dir_staging)}"
+            )
             logger.info(f"  s3uri: {s3path.uri}")
             logger.info(f"  preview at: {s3path.console_url}")
-            staging_data_file = StagingDataFile(
-                uri=s3path.uri,
-                n_record=sub_df.shape[0],
-            )
-            staging_data_file.write_parquet(
+            staging_data_file = {
+                KeyEnum.URI: s3path.uri,
+                KeyEnum.MD5: None,
+                KeyEnum.N_RECORD: sub_df.shape[0],
+            }
+            size = write_data_file(
                 df=sub_df,
                 s3_client=s3_client,
+                s3path=s3path,
                 polars_write_parquet_kwargs=polars_write_parquet_kwargs,
                 s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
             )
+            staging_data_file[KeyEnum.SIZE] = size
             staging_data_file_list.append(staging_data_file)
         # ----------------------------------------------------------------------
         # Method 2, Use ``pyarrow.parquet.write_to_dataset`` methods
@@ -236,25 +233,39 @@ def process_snapshot_data_file(
         s3path = s3dir_staging.joinpath(filename)
         logger.info(f"Write to: {s3path.uri}")
         logger.info(f"  preview at: {s3path.console_url}")
-        staging_data_file = StagingDataFile(
-            uri=s3path.uri,
-            n_record=df.shape[0],
-        )
-        staging_data_file.write_parquet(
+        staging_data_file = {
+            KeyEnum.URI: s3path.uri,
+            KeyEnum.MD5: None,
+            KeyEnum.N_RECORD: df.shape[0],
+        }
+        size = write_data_file(
             df=df,
             s3_client=s3_client,
+            s3path=s3path,
             polars_write_parquet_kwargs=polars_write_parquet_kwargs,
             s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
         )
+        staging_data_file[KeyEnum.SIZE] = size
         staging_data_file_list.append(staging_data_file)
 
-    partition = Partition.from_uri(
-        s3uri=s3dir_staging.uri, s3uri_root=s3dir_staging.uri
+    s3path_manifest = (
+        s3dir_staging
+        / DBSNAPLAKE_MANIFEST_FOLDER
+        / f"manifest-data-{filename}.ndjson.gz"
     )
-    s3path_manifest = partition.s3dir_manifest.joinpath(f"{filename}.ndjson.gz")
-    manifest_file = ManifestFile(
+    s3path_manifest_summary = (
+        s3dir_staging / DBSNAPLAKE_MANIFEST_FOLDER / f"manifest-summary-{filename}.json"
+    )
+    logger.info("Write generated files information to manifest file ...")
+    logger.info(f"  Write to: {s3path_manifest_summary.uri} and {s3path_manifest.uri}")
+    logger.info(
+        f"  preview at: {s3path_manifest_summary.console_url} and {s3path_manifest.console_url}"
+    )
+    manifest_file = ManifestFile.new(
         uri=s3path_manifest.uri,
+        uri_summary=s3path_manifest_summary.uri,
         data_file_list=staging_data_file_list,
+        calculate=True,
     )
     manifest_file.write(s3_client=s3_client)
     return staging_data_file_list
