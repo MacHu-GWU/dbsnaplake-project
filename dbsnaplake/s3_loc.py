@@ -10,8 +10,17 @@ import dataclasses
 from s3pathlib import S3Path
 
 from .partition import Partition, get_partitions, encode_hive_partition
+from .constants import (
+    MANIFESTS_FOLDER,
+    DATALAKE_FOLDER,
+    SNAPSHOT_FILE_GROUPS_FOLDER,
+    STAGING_FILE_GROUPS_FOLDER,
+    PARTITION_FILE_GROUPS_FOLDER,
+    MANIFEST_SUMMARY_FOLDER,
+    MANIFEST_DATA_FOLDER,
+)
 
-if T.TYPE_CHECKING: # pragma: no cover
+if T.TYPE_CHECKING:  # pragma: no cover
     from mypy_boto3_s3.client import S3Client
 
 
@@ -25,14 +34,29 @@ class S3Location:
     .. code-block:: python
 
         s3://bucket/prefix/staging/
-            ${database_name}/
-                ${schema_name}/
-                    ${table_name}/
-                        {snapshot_id}/
-                            ${partition_key1}=${partition_key1_value}/
-                                ${partition_key2}=${partition_key2_value}/
-                                    .../
-                                        ${staging_data_file}
+            manifests/
+                snapshot-file-groups/
+
+                staging-file-groups/
+                partition-file-groups/
+                    manifest-summary/
+                        manifest-summary-1.json
+                        manifest-summary-2.json
+                        ...
+                    manifest-data/
+                        manifest-data-1.parquet
+                        manifest-data-2.parquet
+                        ...
+
+            datalake/
+                ${database_name}/
+                    ${schema_name}/
+                        ${table_name}/
+                            {snapshot_id}/
+                                ${partition_key1}=${partition_key1_value}/
+                                    ${partition_key2}=${partition_key2_value}/
+                                        .../
+                                            ${staging_data_file}
 
         s3://bucket/prefix/datalake/
             ${database_name}/
@@ -60,11 +84,68 @@ class S3Location:
     def s3dir_datalake(self) -> S3Path:
         return S3Path(self.s3uri_datalake).to_dir()
 
-    def get_s3dir_staging_partition(self, kvs: T.Dict[str, str]) -> S3Path:
-        return (self.s3dir_staging / encode_hive_partition(kvs)).to_dir()
+    @property
+    def s3dir_staging_manifest(self) -> S3Path:
+        return (self.s3dir_staging / MANIFESTS_FOLDER).to_dir()
+
+    @property
+    def s3dir_snapshot_file_group_manifest(self) -> S3Path:
+        return (self.s3dir_staging_manifest / SNAPSHOT_FILE_GROUPS_FOLDER).to_dir()
+
+    @property
+    def s3dir_snapshot_file_group_manifest_summary(self) -> S3Path:
+        return (
+            self.s3dir_snapshot_file_group_manifest / MANIFEST_SUMMARY_FOLDER
+        ).to_dir()
+
+    @property
+    def s3dir_snapshot_file_group_manifest_data(self) -> S3Path:
+        return (self.s3dir_snapshot_file_group_manifest / MANIFEST_DATA_FOLDER).to_dir()
+
+    @property
+    def s3dir_staging_file_group_manifest(self) -> S3Path:
+        return (self.s3dir_staging_manifest / STAGING_FILE_GROUPS_FOLDER).to_dir()
+
+    @property
+    def s3dir_staging_file_group_manifest_summary(self) -> S3Path:
+        return (
+            self.s3dir_staging_file_group_manifest / MANIFEST_SUMMARY_FOLDER
+        ).to_dir()
+
+    @property
+    def s3dir_staging_file_group_manifest_data(self) -> S3Path:
+        return (self.s3dir_staging_file_group_manifest / MANIFEST_DATA_FOLDER).to_dir()
+
+    @property
+    def s3dir_partition_file_group_manifest(self) -> S3Path:
+        return (self.s3dir_staging_manifest / PARTITION_FILE_GROUPS_FOLDER).to_dir()
+
+    @property
+    def s3dir_partition_file_group_manifest_summary(self) -> S3Path:
+        return (
+            self.s3dir_partition_file_group_manifest / MANIFEST_SUMMARY_FOLDER
+        ).to_dir()
+
+    @property
+    def s3dir_partition_file_group_manifest_data(self) -> S3Path:
+        return (
+            self.s3dir_partition_file_group_manifest / MANIFEST_DATA_FOLDER
+        ).to_dir()
+
+    @property
+    def s3dir_staging_datalake(self) -> S3Path:
+        return (self.s3dir_staging / DATALAKE_FOLDER).to_dir()
+
+    def iter_staging_datalake_partition(
+        self, s3_client: "S3Client"
+    ) -> T.List[Partition]:
+        return get_partitions(
+            s3_client=s3_client,
+            s3dir_root=self.s3dir_staging_datalake,
+        )
+
+    def get_s3dir_staging_datalake_partition(self, kvs: T.Dict[str, str]) -> S3Path:
+        return (self.s3dir_staging_datalake / encode_hive_partition(kvs)).to_dir()
 
     def get_s3dir_datalake_partition(self, kvs: T.Dict[str, str]) -> S3Path:
-        return (self.s3dir_staging / encode_hive_partition(kvs)).to_dir()
-
-    def iter_staging_partition(self, s3_client: "S3Client") -> T.List[Partition]:
-        return get_partitions(s3_client=s3_client, s3dir_root=self.s3dir_staging)
+        return (self.s3dir_datalake / encode_hive_partition(kvs)).to_dir()

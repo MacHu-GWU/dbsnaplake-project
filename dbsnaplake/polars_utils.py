@@ -24,7 +24,7 @@ def write_parquet_to_s3(
     s3_client: "S3Client",
     polars_write_parquet_kwargs: T.Optional[T.Dict[str, T.Any]] = None,
     s3pathlib_write_bytes_kwargs: T.Optional[T.Dict[str, T.Any]] = None,
-) -> int:
+) -> T.Tuple[int, int, str]:
     """
     Write polars dataframe to AWS S3 as a parquet file.
 
@@ -38,7 +38,10 @@ def write_parquet_to_s3(
         ``s3path.write_bytes`` method. See
         https://s3pathlib.readthedocs.io/en/latest/s3pathlib/core/rw.html#s3pathlib.core.rw.ReadAndWriteAPIMixin.write_bytes
 
-    :return: The number of bytes written to S3, i.e., the size of the parquet file.
+    :return: A tuple of three values:
+        - The number of bytes written to S3, i.e., the size of the parquet file.
+        - The number of records in the DataFrame.
+        - The ETag of the S3 object.
     """
     if polars_write_parquet_kwargs is None:
         polars_write_parquet_kwargs = {}
@@ -49,8 +52,11 @@ def write_parquet_to_s3(
         s3pathlib_write_bytes_kwargs = {}
     s3pathlib_write_bytes_kwargs["content_type"] = "application/x-parquet"
     b = buffer.getvalue()
-    s3path.write_bytes(b, bsm=s3_client, **s3pathlib_write_bytes_kwargs)
-    return len(b)
+    s3path_new = s3path.write_bytes(b, bsm=s3_client, **s3pathlib_write_bytes_kwargs)
+    size = len(b)
+    n_record = df.shape[0]
+    etag = s3path_new.etag
+    return (size, n_record, etag)
 
 
 def write_data_file(
@@ -59,14 +65,17 @@ def write_data_file(
     s3_client: "S3Client",
     polars_write_parquet_kwargs: T_OPTIONAL_KWARGS = None,
     s3pathlib_write_bytes_kwargs: T_OPTIONAL_KWARGS = None,
-) -> int:
+) -> T.Tuple[int, int, str]:
     """
     Write the DataFrame to the given S3Path as a Parquet file, also attach
     additional information related to the Snapshot Data File.
 
     It is a wrapper of the write_parquet_to_s3 function, make the final code shorter.
 
-    :return: The number of bytes written to S3, i.e., the size of the parquet file.
+    :return: A tuple of three values:
+        - The number of bytes written to S3, i.e., the size of the parquet file.
+        - The number of records in the DataFrame.
+        - The ETag of the S3 object.
     """
     if s3pathlib_write_bytes_kwargs is None:
         s3pathlib_write_bytes_kwargs = {}

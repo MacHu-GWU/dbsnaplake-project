@@ -20,20 +20,85 @@ from s3manifesto.api import T_DATA_FILE, KeyEnum, ManifestFile
 
 from .typehint import T_EXTRACTOR, T_OPTIONAL_KWARGS
 from .constants import (
-    DBSNAPLAKE_MANIFEST_FOLDER,
+    MANIFESTS_FOLDER,
+    DATALAKE_FOLDER,
+    SNAPSHOT_FILE_GROUPS_FOLDER,
+    STAGING_FILE_GROUPS_FOLDER,
+    PARTITION_FILE_GROUPS_FOLDER,
+    MANIFEST_SUMMARY_FOLDER,
+    MANIFEST_DATA_FOLDER,
 )
 from .logger import dummy_logger
+from .s3_loc import S3Location
 from .polars_utils import write_data_file, group_by_partition
+from .manifest import (
+    DBSnapshotFileGroupManifestFile,
+    StagingFileGroupManifestFile,
+)
 
 if T.TYPE_CHECKING:  # pragma: no cover
     from mypy_boto3_s3.client import S3Client
 
 
+if T.TYPE_CHECKING:  # pragma: no cover
+    from .s3_loc import S3Location
+    from mypy_boto3_s3.client import S3Client
+
+
+@dataclasses.dataclass
+class DBSnapshotManifestFile(ManifestFile):
+    """
+    This manifest file has the full list of data files from the Database snapshot.
+    """
+
+    def split(
+        self,
+        s3_loc: S3Location,
+        s3_client: "S3Client",
+        target_size: int = 100 * 1000 * 1000,  ## 100 MB
+    ) -> T.List["DBSnapshotFileGroupManifestFile"]:
+        """
+        Split the full list of data files into groups, so that each group has
+        approximately the same size as the target size.
+        """
+        db_snapshot_file_group_manifest_file_list = list()
+        for data_file_list, total_size in self.group_files_into_tasks_by_size(
+            target_size,
+        ):
+            db_snapshot_file_group_manifest_file = DBSnapshotFileGroupManifestFile.new(
+                uri="",
+                uri_summary="",
+                size=total_size,
+                data_file_list=data_file_list,
+                calculate=True,
+            )
+            db_snapshot_file_group_manifest_file.uri = (
+                s3_loc.s3dir_snapshot_file_group_manifest_data.joinpath(
+                    f"manifest-data-{self.fingerprint}.parquet"
+                )
+            )
+            db_snapshot_file_group_manifest_file.uri_summary = (
+                s3_loc.s3dir_snapshot_file_group_manifest_summary.joinpath(
+                    f"manifest-summary-{self.fingerprint}.json"
+                )
+            )
+            db_snapshot_file_group_manifest_file.write(s3_client)
+            db_snapshot_file_group_manifest_file_list.append(
+                db_snapshot_file_group_manifest_file
+            )
+        return db_snapshot_file_group_manifest_file_list
+
+
+@dataclasses.dataclass
+class DBSnapshotFileGroupManifestFile(ManifestFile):
+    pass
+
+
 def batch_read_snapshot_data_file(
-    manifest_file: ManifestFile,
+    db_snapshot_file_group_manifest_file: DBSnapshotFileGroupManifestFile,
     *args,
     **kwargs,
-):
+) -> T.List[pl.DataFrame]:
     """ """
     raise NotImplementedError
 
@@ -135,19 +200,24 @@ def get_filename(filename: T.Optional[str]) -> str:
         filename.split(".")
 
 
+@dataclasses.dataclass
+class StagingFileGroupManifestFile(ManifestFile):
+    pass
+
+
 def process_snapshot_data_file(
+    db_snapshot_file_group_manifest_file: DBSnapshotFileGroupManifestFile,
     df: pl.DataFrame,
     s3_client: "S3Client",
     extract_record_id: DerivedColumn,
     extract_create_time: DerivedColumn,
     extract_update_time: DerivedColumn,
     extract_partition_keys: T.List[DerivedColumn],
-    s3dir_staging: S3Path,
-    filename: T.Optional[str] = None,
+    s3_loc: S3Location,
     polars_write_parquet_kwargs: T_OPTIONAL_KWARGS = None,
     s3pathlib_write_bytes_kwargs: T_OPTIONAL_KWARGS = None,
     logger=dummy_logger,
-) -> T.List[T_DATA_FILE]:
+) -> StagingFileGroupManifestFile:
     """
     Convert the Snapshot Data File to many Staging Data Files, based on the
     number of partition keys.
@@ -177,7 +247,9 @@ def process_snapshot_data_file(
     if polars_write_parquet_kwargs is None:
         polars_write_parquet_kwargs = dict(compression="snappy")
     compression = polars_write_parquet_kwargs["compression"]
-    filename = get_filename(filename) + f".{compression}.parquet"
+    filename = (
+        f"{db_snapshot_file_group_manifest_file.fingerprint}.{compression}.parquet"
+    )
     staging_data_file_list = list()
 
     # if we have partition keys, then we group data by partition keys
@@ -191,9 +263,11 @@ def process_snapshot_data_file(
         # Method 1, split df into sub_df based on partition keys and
         # write them to different partition (1 file per partition)
         # ----------------------------------------------------------------------
+        total_size = 0
+        total_n_record = 0
         results = group_by_partition(
             df=df,
-            s3dir=s3dir_staging,
+            s3dir=s3_loc.s3dir_staging_datalake,
             filename=filename,
             partition_keys=partition_keys,
             sort_by=[extract_update_time.alias],
@@ -201,23 +275,25 @@ def process_snapshot_data_file(
         logger.info(f"Will write data to {len(results)} partitions ...")
         for ith, (sub_df, s3path) in enumerate(results, start=1):
             logger.info(
-                f"Write to {ith}th partition: {s3path.relative_to(s3dir_staging)}"
+                f"Write to {ith}th partition: {s3path.relative_to(s3_loc.s3dir_staging_datalake)}"
             )
             logger.info(f"  s3uri: {s3path.uri}")
             logger.info(f"  preview at: {s3path.console_url}")
-            staging_data_file = {
-                KeyEnum.URI: s3path.uri,
-                KeyEnum.MD5: None,
-                KeyEnum.N_RECORD: sub_df.shape[0],
-            }
-            size = write_data_file(
+            size, n_record, etag = write_data_file(
                 df=sub_df,
                 s3_client=s3_client,
                 s3path=s3path,
                 polars_write_parquet_kwargs=polars_write_parquet_kwargs,
                 s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
             )
-            staging_data_file[KeyEnum.SIZE] = size
+            total_size += size
+            total_n_record += n_record
+            staging_data_file = {
+                KeyEnum.URI: s3path.uri,
+                KeyEnum.SIZE: size,
+                KeyEnum.N_RECORD: n_record,
+                KeyEnum.ETAG: etag,
+            }
             staging_data_file_list.append(staging_data_file)
         # ----------------------------------------------------------------------
         # Method 2, Use ``pyarrow.parquet.write_to_dataset`` methods
@@ -230,42 +306,49 @@ def process_snapshot_data_file(
     # if we don't have partition keys, then we write this file to the s3dir_staging
     else:
         logger.info("We don't have partition keys, write to single file ...")
-        s3path = s3dir_staging.joinpath(filename)
+        s3path = s3_loc.s3dir_staging_datalake.joinpath(filename)
         logger.info(f"Write to: {s3path.uri}")
         logger.info(f"  preview at: {s3path.console_url}")
-        staging_data_file = {
-            KeyEnum.URI: s3path.uri,
-            KeyEnum.MD5: None,
-            KeyEnum.N_RECORD: df.shape[0],
-        }
-        size = write_data_file(
+        total_size, total_n_record, etag = write_data_file(
             df=df,
             s3_client=s3_client,
             s3path=s3path,
             polars_write_parquet_kwargs=polars_write_parquet_kwargs,
             s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
         )
-        staging_data_file[KeyEnum.SIZE] = size
+        staging_data_file = {
+            KeyEnum.URI: s3path.uri,
+            KeyEnum.SIZE: total_size,
+            KeyEnum.N_RECORD: total_n_record,
+            KeyEnum.ETAG: etag,
+        }
         staging_data_file_list.append(staging_data_file)
 
-    s3path_manifest = (
-        s3dir_staging
-        / DBSNAPLAKE_MANIFEST_FOLDER
-        / f"manifest-data-{filename}.ndjson.gz"
-    )
-    s3path_manifest_summary = (
-        s3dir_staging / DBSNAPLAKE_MANIFEST_FOLDER / f"manifest-summary-{filename}.json"
-    )
-    logger.info("Write generated files information to manifest file ...")
-    logger.info(f"  Write to: {s3path_manifest_summary.uri} and {s3path_manifest.uri}")
-    logger.info(
-        f"  preview at: {s3path_manifest_summary.console_url} and {s3path_manifest.console_url}"
-    )
-    manifest_file = ManifestFile.new(
-        uri=s3path_manifest.uri,
-        uri_summary=s3path_manifest_summary.uri,
+    staging_file_group_manifest_file = StagingFileGroupManifestFile.new(
+        uri="",
+        uri_summary="",
         data_file_list=staging_data_file_list,
+        size=total_size,
+        n_record=total_n_record,
         calculate=True,
     )
-    manifest_file.write(s3_client=s3_client)
-    return staging_data_file_list
+    fingerprint = staging_file_group_manifest_file.fingerprint
+    s3path_manifest_data = (
+        s3_loc.s3dir_staging_file_group_manifest_data
+        / f"manifest-data-{fingerprint}.parquet"
+    )
+    s3path_manifest_summary = (
+        s3_loc.s3dir_staging_file_group_manifest_summary
+        / f"manifest-summary-{filename}.json"
+    )
+    staging_file_group_manifest_file.uri = s3path_manifest_data.uri
+    staging_file_group_manifest_file.uri_summary = s3path_manifest_summary.uri
+    logger.info("Write generated files information to manifest file ...")
+    logger.info(
+        f"  Write to: {s3path_manifest_summary.uri} and {s3path_manifest_data.uri}"
+    )
+    logger.info(
+        f"  preview at: {s3path_manifest_summary.console_url} and {s3path_manifest_data.console_url}"
+    )
+    staging_file_group_manifest_file.write(s3_client=s3_client)
+    return staging_file_group_manifest_file
