@@ -34,11 +34,11 @@ def get_merged_schema(
     >>> print(merged_schema)
     {'A': Int64, 'B': Float64, 'C': Boolean}
 
-    **Note**
+    .. note::
 
-    This function does not handle conflicts between data types. If the same
-    column name appears with different types in multiple DataFrames, the type
-    from the last DataFrame in the list will be used in the merged schema.
+        This function does not handle conflicts between data types. If the same
+        column name appears with different types in multiple DataFrames, the type
+        from the last DataFrame in the list will be used in the merged schema.
     """
     merged_schema = dict()
     for df in dfs:
@@ -66,7 +66,6 @@ def harmonize_schemas(
     values and the specified data type from the schema. Existing columns in the
     DataFrames are left unchanged, even if their data type differs from the schema.
 
-
     :param dfs: A list of Polars DataFrames whose schemas are to be harmonized.
     :param schema: A dictionary representing the target schema. Keys are column names,
         and values are Polars DataTypes.
@@ -87,13 +86,13 @@ def harmonize_schemas(
     >>> print(harmonized_dfs[1].schema)
     {'B': Float64, 'C': Boolean, 'A': Int64, 'D': Float64}
 
-    **Notes**
+    .. note::
 
-    1. This function only adds missing columns; it does not modify or remove
-       existing columns in the input DataFrames.
-    2. The data type of existing columns is not changed, even if it differs
-       from the type specified in the target schema.
-    3. Added columns are filled with NULL values of the appropriate type.
+        1. This function only adds missing columns; it does not modify or remove
+           existing columns in the input DataFrames.
+        2. The data type of existing columns is not changed, even if it differs
+           from the type specified in the target schema.
+        3. Added columns are filled with NULL values of the appropriate type.
     """
     new_dfs = list()
     for df in dfs:
@@ -126,8 +125,6 @@ def merge_dataframes(
 
     :raises ValueError: If there are schema conflicts between the input DataFrames
         (e.g., same column name with different data types).
-    :raises ValueError: If there are schema conflicts between the input DataFrames
-        (e.g., same column name with different data types).
 
     **Example**
 
@@ -148,14 +145,14 @@ def merge_dataframes(
     │ null┆ d   ┆ false │
     └─────┴─────┴───────┘
 
-    **Notes**
+    .. note::
 
-    - This function uses :func:`get_merged_schema` with ``raise_on_conflict=True``,
-      so it will raise an error if there are any schema conflicts.
-    - The :func:`harmonize_schemas` function is used to ensure all DataFrames
-      have the same schema before concatenation.
-    - The order of rows in the output DataFrame corresponds to the order
-      of DataFrames in the input list.
+        - This function uses :func:`get_merged_schema` with ``raise_on_conflict=True``,
+          so it will raise an error if there are any schema conflicts.
+        - The :func:`harmonize_schemas` function is used to ensure all DataFrames
+          have the same schema before concatenation.
+        - The order of rows in the output DataFrame corresponds to the order
+          of DataFrames in the input list.
     """
     schema = get_merged_schema(dfs, raise_on_conflict=True)
     dfs_harmonized = harmonize_schemas(dfs, schema)

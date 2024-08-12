@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 
 import typing as T
-import boto3
 import moto
+import boto3
+from s3pathlib import context
 
 if T.TYPE_CHECKING:  # pragma: no cover
     from mypy_boto3_s3.client import S3Client
@@ -23,6 +24,7 @@ class BaseMockAwsTest:
             cls.mock_aws.start()
 
         cls.boto_ses = boto3.Session(region_name="us-east-1")
+        context.attach_boto_session(cls.boto_ses)
         cls.s3_client = cls.boto_ses.client("s3")
 
         cls.s3_client.create_bucket(Bucket=cls.bucket)

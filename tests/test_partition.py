@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 
-import moto
-import boto3
-from s3pathlib import S3Path, context
+from s3pathlib import S3Path
 
 from dbsnaplake.partition import (
     Partition,
@@ -16,12 +14,16 @@ from dbsnaplake.tests.mock_aws import BaseMockAwsTest
 class TestPartition:
     def test_from_uri(self):
         part = Partition.from_uri(
-            s3uri="s3://bucket/data/year=01/", s3uri_root="s3://bucket/data/"
+            s3uri="s3://bucket/data/year=01",
+            s3uri_root="s3://bucket/data",
         )
+        assert part.uri == "s3://bucket/data/year=01/"
         assert part.data == {"year": "01"}
+        assert part.s3dir.uri == "s3://bucket/data/year=01/"
 
         part = Partition.from_uri(
-            s3uri="s3://bucket/data/", s3uri_root="s3://bucket/data/"
+            s3uri="s3://bucket/data/",
+            s3uri_root="s3://bucket/data/",
         )
         assert part.data == {}
 
