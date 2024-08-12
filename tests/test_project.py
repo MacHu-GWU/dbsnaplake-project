@@ -40,7 +40,6 @@ class Test(BaseMockAwsTest):
 
     @classmethod
     def setup_class_post_hook(cls):
-        context.attach_boto_session(cls.boto_ses)
         s3dir_bucket = S3Path.from_s3_uri(f"s3://{cls.bucket}/")
         s3dir_snapshot = s3dir_bucket.joinpath("snapshot").to_dir()
         s3dir_snapshot_data = s3dir_snapshot.joinpath("data").to_dir()
