@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 
+# DataFrame Column Names
 COL_RECORD_ID = "record_id"
 COL_CREATE_TIME = "create_time"
 COL_UPDATE_TIME = "update_time"
 
+# S3 Object Metadata Keys
 S3_METADATA_KEY_SIZE = "size"
 S3_METADATA_KEY_N_RECORD = "n_record"
 S3_METADATA_KEY_SNAPSHOT_DATA_FILE = "snapshot_data_file"

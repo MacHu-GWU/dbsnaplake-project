@@ -10,12 +10,12 @@ sub packages and modules
 .. toctree::
     :maxdepth: 1
 
+    _import_utils <_import_utils>
     api <api>
     compaction <compaction>
     constants <constants>
     lambda_function <lambda_function>
     logger <logger>
-    manifest <manifest>
     partition <partition>
     polars_utils <polars_utils>
     project <project>

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+from . import constants
 from .typehint import T_RECORD
 from .typehint import T_DF_SCHEMA
 from .typehint import T_EXTRACTOR

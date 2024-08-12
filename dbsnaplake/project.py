@@ -1,45 +1,74 @@
 # -*- coding: utf-8 -*-
 
+"""
+DB Snapshot to Data Lake Workflow Management.
+
+This module provides a set of functions and a class to manage the workflow of
+exporting database snapshots to a data lake. It offers both functional and
+object-oriented programming approaches to suit different user needs and preferences.
+
+**Functional API**:
+
+The module includes step-by-step functions that can be used independently,
+allowing for greater flexibility and customization of the workflow. These
+functions cover various stages of the process, from planning the snapshot
+export to executing the final data lake ingestion.
+
+Key functions include:
+
+- :func:`step_1_1_plan_snapshot_to_staging`: Plan the division of DB snapshot files.
+- :func:`step_1_2_get_snapshot_to_staging_todo_list`: Retrieve the list of snapshot groups to process.
+- :func:`step_1_3_process_db_snapshot_file_group_manifest_file`: Process individual snapshot groups.
+- :func:`step_2_1_plan_staging_to_datalake`: Plan the merging of staging files into the data lake.
+- :func:`step_2_2_get_staging_to_datalake_todo_list`: Get the list of staging file groups to process.
+- :func:`step_2_3_process_partition_file_group_manifest_file`: Execute the compaction of staging files.
+
+**Object-Oriented API**:
+
+The module also provides a :class:`Project` class that encapsulates the entire workflow.
+This class-based approach simplifies usage for those who prefer a more
+streamlined, less customizable process. Users can initialize a Project instance
+with all necessary parameters and then execute each step of the workflow using
+class methods.
+
+Key methods of the Project class include:
+
+- :meth:`Project.step_1_1_plan_snapshot_to_staging`
+- :meth:`Project.step_1_2_process_db_snapshot_file_group_manifest_file`
+- :meth:`Project.step_2_1_plan_staging_to_datalake`
+- :meth:`Project.step_2_2_process_partition_file_group_manifest_file`
+
+The functional API offers more flexibility for advanced users who need to extend
+or customize the workflow, while the class-based API provides a simpler interface
+for users who want to quickly implement the standard workflow with minimal setup.
+
+This module is designed to be part of a larger data processing ecosystem,
+integrating with other components for S3 interactions, manifest file handling,
+and data transformations.
+"""
+
 import typing as T
 import dataclasses
-from datetime import datetime
 from functools import cached_property
 
 import polars as pl
-from s3pathlib import S3Path, context
-from s3manifesto.api import KeyEnum, ManifestFile
+from s3pathlib import S3Path
+from s3manifesto.api import ManifestFile
 from .vendor.vislog import VisLog
 
-from .typehint import T_RECORD
-from .typehint import T_DF_SCHEMA
-from .typehint import T_EXTRACTOR
 from .typehint import T_OPTIONAL_KWARGS
 from .utils import repr_data_size
 from .s3_loc import S3Location
-from .partition import Partition
-from .partition import extract_partition_data
-from .partition import encode_hive_partition
-from .partition import get_s3dir_partition
-from .partition import get_partitions
-from .polars_utils import write_parquet_to_s3
-from .polars_utils import write_data_file
-from .polars_utils import read_parquet_from_s3
-from .polars_utils import read_many_parquet_from_s3
-from .polars_utils import group_by_partition
-from .compaction import get_merged_schema
-from .compaction import harmonize_schemas
 from .logger import dummy_logger
 from .snapshot_to_staging import DBSnapshotManifestFile
 from .snapshot_to_staging import DBSnapshotFileGroupManifestFile
-from .snapshot_to_staging import batch_read_snapshot_data_file
 from .snapshot_to_staging import DerivedColumn
 from .snapshot_to_staging import StagingFileGroupManifestFile
 from .snapshot_to_staging import process_db_snapshot_file_group_manifest_file
-from .staging_to_datalake import extract_s3dir
 from .staging_to_datalake import PartitionFileGroupManifestFile
 from .staging_to_datalake import execute_compaction
 
-if T.TYPE_CHECKING:
+if T.TYPE_CHECKING:  # pragma: no cover
     from mypy_boto3_s3.client import S3Client
 
 
@@ -47,16 +76,19 @@ def print_manifest_file_info(
     manifest_file: ManifestFile,
     logger,
 ):
+    """
+    A helper function to print the summary of a manifest file.
+    """
+    # fmt: off
     logger.info(f"Process manifest file: {manifest_file.fingerprint}")
     logger.info(f"  manifest summary: {manifest_file.uri_summary}")
-    logger.info(
-        f"    preview at: {S3Path.from_s3_uri(manifest_file.uri_summary).console_url}"
-    )
+    logger.info(f"    preview at: {S3Path.from_s3_uri(manifest_file.uri_summary).console_url}")
     logger.info(f"  manifest data: {manifest_file.uri}")
     logger.info(f"    preview at: {S3Path.from_s3_uri(manifest_file.uri).console_url}")
     logger.info(f"  total files: {len(manifest_file.data_file_list)}")
     logger.info(f"  total size: {repr_data_size(manifest_file.size)}")
     logger.info(f"  total n_record: {manifest_file.n_record}")
+    # fmt: on
 
 
 def step_1_1_plan_snapshot_to_staging(
