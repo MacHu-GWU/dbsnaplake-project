@@ -1,0 +1,27 @@
+dbsnaplake
+==========
+
+.. automodule:: dbsnaplake
+    :members:
+
+sub packages and modules
+------------------------
+
+.. toctree::
+    :maxdepth: 1
+
+    api <api>
+    compaction <compaction>
+    constants <constants>
+    lambda_function <lambda_function>
+    logger <logger>
+    manifest <manifest>
+    partition <partition>
+    polars_utils <polars_utils>
+    project <project>
+    s3_loc <s3_loc>
+    snapshot_to_staging <snapshot_to_staging>
+    staging_to_datalake <staging_to_datalake>
+    typehint <typehint>
+    utils <utils>
+    

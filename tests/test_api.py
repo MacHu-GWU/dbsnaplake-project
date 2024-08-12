@@ -9,12 +9,12 @@ def test():
     _ = api.T_DF_SCHEMA
     _ = api.T_EXTRACTOR
     _ = api.T_OPTIONAL_KWARGS
+    _ = api.repr_data_size
     _ = api.Partition
     _ = api.extract_partition_data
     _ = api.encode_hive_partition
     _ = api.get_s3dir_partition
     _ = api.get_partitions
-    _ = api.S3Location
     _ = api.write_parquet_to_s3
     _ = api.group_by_partition
     _ = api.calculate_merge_plan
@@ -27,7 +27,7 @@ def test():
     _ = api.DerivedColumn
     _ = api.SnapshotDataFile
     _ = api.StagingDataFile
-    _ = api.process_snapshot_data_file
+    _ = api.process_db_snapshot_file_group_manifest_file
 
 
 if __name__ == "__main__":

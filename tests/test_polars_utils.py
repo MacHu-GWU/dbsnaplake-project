@@ -7,6 +7,9 @@ from s3pathlib import S3Path
 
 from dbsnaplake.polars_utils import (
     write_parquet_to_s3,
+    write_data_file,
+    read_parquet_from_s3,
+    read_many_parquet_from_s3,
     group_by_partition,
 )
 from dbsnaplake.tests.mock_aws import BaseMockAwsTest
@@ -23,8 +26,9 @@ class Test(BaseMockAwsTest):
             s3path=s3path,
             s3_client=self.s3_client,
         )
-
-        df = pl.read_parquet(s3path.read_bytes(bsm=self.s3_client))
+        df = read_parquet_from_s3(s3path=s3path, s3_client=self.s3_client)
+        assert df.shape == (3, 2)
+        df = read_many_parquet_from_s3(s3path_list=[s3path], s3_client=self.s3_client)
         assert df.shape == (3, 2)
 
     def test_group_by_partition(self):

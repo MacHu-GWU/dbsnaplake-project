@@ -28,6 +28,8 @@ def write_parquet_to_s3(
     """
     Write polars dataframe to AWS S3 as a parquet file.
 
+    The original ``polars.write_parquet`` method doesn't work with moto.
+
     :param df: ``polars.DataFrame`` object.
     :param s3path: ``s3pathlib.S3Path`` object.
     :param s3_client: ``boto3.client("s3")`` object.
@@ -95,6 +97,40 @@ def write_data_file(
     )
 
 
+def read_parquet_from_s3(
+    s3path: S3Path,
+    s3_client: "S3Client",
+    polars_read_parquet_kwargs: T_OPTIONAL_KWARGS = None,
+    s3pathlib_read_bytes_kwargs: T_OPTIONAL_KWARGS = None,
+) -> pl.DataFrame:
+    if polars_read_parquet_kwargs is None:
+        polars_read_parquet_kwargs = {}
+    if s3pathlib_read_bytes_kwargs is None:
+        s3pathlib_read_bytes_kwargs = {}
+    b = s3path.read_bytes(bsm=s3_client, **s3pathlib_read_bytes_kwargs)
+    df = pl.read_parquet(b, **polars_read_parquet_kwargs)
+    return df
+
+
+def read_many_parquet_from_s3(
+    s3path_list: T.List[S3Path],
+    s3_client: "S3Client",
+    polars_read_parquet_kwargs: T_OPTIONAL_KWARGS = None,
+    s3pathlib_read_bytes_kwargs: T_OPTIONAL_KWARGS = None,
+) -> pl.DataFrame:
+    sub_df_list = list()
+    for s3path in s3path_list:
+        sub_df = read_parquet_from_s3(
+            s3path=s3path,
+            s3_client=s3_client,
+            polars_read_parquet_kwargs=polars_read_parquet_kwargs,
+            s3pathlib_read_bytes_kwargs=s3pathlib_read_bytes_kwargs,
+        )
+        sub_df_list.append(sub_df)
+    df = pl.concat(sub_df_list)
+    return df
+
+
 def group_by_partition(
     df: pl.DataFrame,
     s3dir: S3Path,
@@ -118,6 +154,7 @@ def group_by_partition(
         df.group_by(partition_keys),
         start=1,
     ):
+        sub_df = sub_df.drop(partition_keys)
         if sort_by:
             sub_df = sub_df.sort(by=sort_by)
         kvs = dict(zip(partition_keys, partition_values))
