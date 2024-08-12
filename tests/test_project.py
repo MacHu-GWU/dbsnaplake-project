@@ -100,6 +100,8 @@ class Test(BaseMockAwsTest):
                     alias="month",
                 ),
             ],
+            sort_by=["update_time"],
+            descending=[True],
             target_parquet_file_size=target_parquet_file_size,
         )
 
@@ -112,6 +114,7 @@ class Test(BaseMockAwsTest):
             s3_client=self.s3_client,
         )
         assert df.shape[0] == self.n_db_snapshot_record
+        logger.info(str(df))
 
     def _test(self):
         with logger.disabled(
@@ -125,8 +128,8 @@ class Test(BaseMockAwsTest):
         ):
             self.project.step_1_2_process_db_snapshot_file_group_manifest_file()
         with logger.disabled(
-            disable=True,  # no log
-            # disable=False,  # show log
+            # disable=True,  # no log
+            disable=False,  # show log
         ):
             self.project.step_2_1_plan_staging_to_datalake()
         with logger.disabled(
@@ -134,13 +137,30 @@ class Test(BaseMockAwsTest):
             disable=False,  # show log
         ):
             self.project.step_2_2_process_partition_file_group_manifest_file()
+        with logger.disabled(
+            # disable=True,  # no log
+            disable=False,  # show log
+        ):
+            self.run_analysis()
 
-        self.run_analysis()
-
-    def test(self):
+        # no partition
         with logger.disabled(
             disable=True,  # no log
             # disable=False,  # show log
+        ):
+            self.project.s3_loc.s3dir_staging.delete()
+            self.project.s3_loc.s3dir_datalake.delete()
+            self.project.extract_partition_keys = list()
+            self.project.step_1_1_plan_snapshot_to_staging()
+            self.project.step_1_2_process_db_snapshot_file_group_manifest_file()
+            self.project.step_2_1_plan_staging_to_datalake()
+            self.project.step_2_2_process_partition_file_group_manifest_file()
+            self.run_analysis()
+
+    def test(self):
+        with logger.disabled(
+            # disable=True,  # no log
+            disable=False,  # show log
         ):
             logger.info("")
             self._test()

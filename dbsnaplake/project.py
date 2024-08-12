@@ -64,9 +64,10 @@ from .snapshot_to_staging import DBSnapshotManifestFile
 from .snapshot_to_staging import DBSnapshotFileGroupManifestFile
 from .snapshot_to_staging import DerivedColumn
 from .snapshot_to_staging import StagingFileGroupManifestFile
+from .snapshot_to_staging import T_BatchReadSnapshotDataFileCallable
 from .snapshot_to_staging import process_db_snapshot_file_group_manifest_file
 from .staging_to_datalake import PartitionFileGroupManifestFile
-from .staging_to_datalake import execute_compaction
+from .staging_to_datalake import process_partition_file_group_manifest_file
 
 if T.TYPE_CHECKING:  # pragma: no cover
     from mypy_boto3_s3.client import S3Client
@@ -105,10 +106,12 @@ def step_1_1_plan_snapshot_to_staging(
     logger.info(
         f"Divide db snapshot files into {repr_data_size(target_size)}-sized groups"
     )
-    db_snapshot_file_group_manifest_file_list = db_snapshot_manifest_file.split(
-        s3_loc=s3_loc,
-        s3_client=s3_client,
-        target_size=target_size,
+    db_snapshot_file_group_manifest_file_list = (
+        db_snapshot_manifest_file.split_into_groups(
+            s3_loc=s3_loc,
+            s3_client=s3_client,
+            target_size=target_size,
+        )
     )
     logger.info(f"  got {len(db_snapshot_file_group_manifest_file_list)} groups")
 
@@ -118,7 +121,7 @@ def step_1_2_get_snapshot_to_staging_todo_list(
     s3_loc: S3Location,
 ) -> T.List[DBSnapshotFileGroupManifestFile]:
     db_snapshot_file_group_manifest_file_list = (
-        DBSnapshotFileGroupManifestFile.read_many(
+        DBSnapshotFileGroupManifestFile.read_all_groups(
             s3_loc=s3_loc,
             s3_client=s3_client,
         )
@@ -127,10 +130,10 @@ def step_1_2_get_snapshot_to_staging_todo_list(
 
 
 def step_1_3_process_db_snapshot_file_group_manifest_file(
+    db_snapshot_file_group_manifest_file: DBSnapshotFileGroupManifestFile,
     s3_client: "S3Client",
     s3_loc: S3Location,
-    db_snapshot_file_group_manifest_file: DBSnapshotFileGroupManifestFile,
-    batch_read_func: T.Callable,
+    batch_read_snapshot_data_file_func: T_BatchReadSnapshotDataFileCallable,
     extract_record_id: DerivedColumn,
     extract_create_time: DerivedColumn,
     extract_update_time: DerivedColumn,
@@ -143,15 +146,10 @@ def step_1_3_process_db_snapshot_file_group_manifest_file(
         manifest_file=db_snapshot_file_group_manifest_file,
         logger=logger,
     )
-    logger.info("Read dataframe from data files ...")
-    df = batch_read_func(
-        db_snapshot_file_group_manifest_file=db_snapshot_file_group_manifest_file
-    )
-    logger.info(f"  Dataframe Shape {df.shape}")
     logger.info("Transform and write data files ...")
     staging_file_group_manifest_file = process_db_snapshot_file_group_manifest_file(
         db_snapshot_file_group_manifest_file=db_snapshot_file_group_manifest_file,
-        df=df,
+        batch_read_snapshot_data_file_func=batch_read_snapshot_data_file_func,
         s3_client=s3_client,
         extract_record_id=extract_record_id,
         extract_create_time=extract_create_time,
@@ -191,18 +189,21 @@ def step_2_2_get_staging_to_datalake_todo_list(
     s3_client: "S3Client",
     s3_loc: S3Location,
 ) -> T.List[PartitionFileGroupManifestFile]:
-    partition_file_group_manifest_file_list = PartitionFileGroupManifestFile.read_many(
-        s3_loc=s3_loc,
-        s3_client=s3_client,
+    partition_file_group_manifest_file_list = (
+        PartitionFileGroupManifestFile.read_all_groups(
+            s3_loc=s3_loc,
+            s3_client=s3_client,
+        )
     )
     return partition_file_group_manifest_file_list
 
 
 def step_2_3_process_partition_file_group_manifest_file(
+    partition_file_group_manifest_file: PartitionFileGroupManifestFile,
     s3_client: "S3Client",
     s3_loc: S3Location,
-    partition_file_group_manifest_file: PartitionFileGroupManifestFile,
-    update_at_col: str,
+    sort_by: T.Optional[T.List[str]] = None,
+    descending: T.Optional[T.List[bool]] = None,
     polars_write_parquet_kwargs: T_OPTIONAL_KWARGS = None,
     s3pathlib_write_bytes_kwargs: T_OPTIONAL_KWARGS = None,
     logger=dummy_logger,
@@ -211,11 +212,12 @@ def step_2_3_process_partition_file_group_manifest_file(
         manifest_file=partition_file_group_manifest_file,
         logger=logger,
     )
-    s3path = execute_compaction(
+    s3path = process_partition_file_group_manifest_file(
         partition_file_group_manifest_file=partition_file_group_manifest_file,
         s3_client=s3_client,
         s3_loc=s3_loc,
-        update_at_col=update_at_col,
+        sort_by=sort_by,
+        descending=descending,
         polars_write_parquet_kwargs=polars_write_parquet_kwargs,
         s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
         logger=logger,
@@ -237,6 +239,8 @@ class Project:
     extract_create_time: DerivedColumn = dataclasses.field()
     extract_update_time: DerivedColumn = dataclasses.field()
     extract_partition_keys: T.List[DerivedColumn] = dataclasses.field()
+    sort_by: T.List[str] = dataclasses.field()
+    descending: T.List[bool] = dataclasses.field()
     target_parquet_file_size: int = dataclasses.field()
 
     @cached_property
@@ -292,10 +296,10 @@ class Project:
         ) in db_snapshot_file_group_manifest_file_list:
             with logger.nested():
                 new_step_1_3_process_db_snapshot_file_group_manifest_file(
+                    db_snapshot_file_group_manifest_file=db_snapshot_file_group_manifest_file,
                     s3_client=self.s3_client,
                     s3_loc=self.s3_loc,
-                    db_snapshot_file_group_manifest_file=db_snapshot_file_group_manifest_file,
-                    batch_read_func=self.batch_read_snapshot_data_file,
+                    batch_read_snapshot_data_file_func=self.batch_read_snapshot_data_file,
                     extract_record_id=self.extract_record_id,
                     extract_create_time=self.extract_create_time,
                     extract_update_time=self.extract_update_time,
@@ -332,9 +336,10 @@ class Project:
         ) in partition_file_group_manifest_file_list:
             with logger.nested():
                 new_step_2_3_process_partition_file_group_manifest_file(
+                    partition_file_group_manifest_file=partition_file_group_manifest_file,
                     s3_client=self.s3_client,
                     s3_loc=self.s3_loc,
-                    partition_file_group_manifest_file=partition_file_group_manifest_file,
-                    update_at_col="update_at",
+                    sort_by=self.sort_by,
+                    descending=self.descending,
                     logger=logger,
                 )

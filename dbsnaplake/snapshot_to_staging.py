@@ -1,8 +1,22 @@
 # -*- coding: utf-8 -*-
 
 """
-This module defines the abstraction of the transformation process from
-Snapshot Data File to Staging Data File.
+This module defines the abstraction and implementation of the transformation process
+from Database Snapshot Data Files to Staging Data Files. It includes classes and
+functions for managing manifest files, processing data groups, and handling data
+transformations using Polars DataFrames.
+
+Key components:
+
+- :class:`DBSnapshotManifestFile`: Represents the full list of data files from the Database snapshot.
+- :class:`DBSnapshotFileGroupManifestFile`: Represents a group of snapshot files.
+- :class:`StagingFileGroupManifestFile`: Represents a group of staging files.
+- :class:`DerivedColumn`: Defines how to derive new columns from the DataFrame.
+- Various utility functions for data processing and S3 interactions.
+
+.. seealso::
+
+    `s3manifesto <https://s3manifesto.readthedocs.io/en/latest/>`_
 """
 
 import typing as T
@@ -32,56 +46,74 @@ if T.TYPE_CHECKING:  # pragma: no cover
 @dataclasses.dataclass
 class DBSnapshotManifestFile(ManifestFile):
     """
-    This manifest file has the full list of data files from the Database snapshot.
+    Represents the full list of data files from the Database snapshot.
+
+    This class extends
+    `ManifestFile <https://s3manifesto.readthedocs.io/en/latest/s3manifesto/manifest.html#module-s3manifesto.manifest>`_
+    to provide specific functionality for handling database snapshot manifest files.
     """
 
-    def split(
+    def split_into_groups(
         self,
         s3_loc: S3Location,
         s3_client: "S3Client",
         target_size: int = 100 * 1000 * 1000,  ## 100 MB
     ) -> T.List["DBSnapshotFileGroupManifestFile"]:
         """
-        Split the full list of data files into groups, so that each group has
-        approximately the same size as the target size.
+        Split the full list of data files into groups of approximately equal size.
+
+        :param s3_loc: S3 location information.
+        :param s3_client: Boto3 S3 client.
+        :param target_size: Target size for each group in bytes. Default is 100 MB.
+
+        :return: List of file group manifest files.
         """
         db_snapshot_file_group_manifest_file_list = list()
+        _lst = db_snapshot_file_group_manifest_file_list  # for shortening the code
         for ith, (data_file_list, total_size) in enumerate(
             self.group_files_into_tasks_by_size(target_size=target_size),
             start=1,
         ):
             db_snapshot_file_group_manifest_file = DBSnapshotFileGroupManifestFile.new(
-                uri="",
-                uri_summary="",
+                uri=s3_loc.s3dir_snapshot_file_group_manifest_data.joinpath(
+                    f"manifest-data-{ith}.parquet"
+                ).uri,
+                uri_summary=s3_loc.s3dir_snapshot_file_group_manifest_summary.joinpath(
+                    f"manifest-summary-{ith}.json"
+                ).uri,
                 size=total_size,
                 data_file_list=data_file_list,
                 calculate=True,
             )
-            db_snapshot_file_group_manifest_file.uri = (
-                s3_loc.s3dir_snapshot_file_group_manifest_data.joinpath(
-                    f"manifest-data-{ith}.parquet"
-                ).uri
-            )
-            db_snapshot_file_group_manifest_file.uri_summary = (
-                s3_loc.s3dir_snapshot_file_group_manifest_summary.joinpath(
-                    f"manifest-summary-{ith}.json"
-                ).uri
-            )
             db_snapshot_file_group_manifest_file.write(s3_client)
-            db_snapshot_file_group_manifest_file_list.append(
-                db_snapshot_file_group_manifest_file
-            )
+            _lst.append(db_snapshot_file_group_manifest_file)
         return db_snapshot_file_group_manifest_file_list
 
 
 @dataclasses.dataclass
 class DBSnapshotFileGroupManifestFile(ManifestFile):
+    """
+    Represents a group of snapshot files from the database snapshot.
+
+    This class extends
+    `ManifestFile <https://s3manifesto.readthedocs.io/en/latest/s3manifesto/manifest.html#module-s3manifesto.manifest>`_
+    to provide specific functionality for handling groups of snapshot files.
+    """
+
     @classmethod
-    def read_many(
+    def read_all_groups(
         cls,
         s3_loc: S3Location,
         s3_client: "S3Client",
-    ):
+    ) -> T.List["DBSnapshotFileGroupManifestFile"]:
+        """
+        Read all snapshot file group manifest files from the specified S3 location.
+
+        :param s3_loc: S3 location information.
+        :param s3_client: Boto3 S3 client.
+
+        :returns: List of all file group manifest files.
+        """
         s3path_list = s3_loc.s3dir_snapshot_file_group_manifest_summary.iter_objects(
             bsm=s3_client
         ).all()
@@ -97,59 +129,65 @@ class DBSnapshotFileGroupManifestFile(ManifestFile):
 
 def batch_read_snapshot_data_file(
     db_snapshot_file_group_manifest_file: DBSnapshotFileGroupManifestFile,
-    *args,
     **kwargs,
-) -> T.List[pl.DataFrame]:
+) -> pl.DataFrame:
     """ """
     raise NotImplementedError
+
+
+T_BatchReadSnapshotDataFileCallable = T.Callable[
+    [DBSnapshotFileGroupManifestFile, ...], pl.DataFrame
+]
 
 
 @dataclasses.dataclass
 class DerivedColumn:
     """
-    Declare how you want to derive a new column from the DataFrame.
+    Declares how to derive a new column from the DataFrame.
 
-    :param extractor: if it is a polars expression, then it will be used
-        to derive the new column. if it is a string, then use the given column,
-        note that this column has to exist.
-    :param alias: if you want to rename the derived column, then specify the alias.
+    :param extractor: A Polars expression or column name to derive the new column.
+        If it is a polars expression, then it will be used to derive the new column.
+        If it is a string, then use the given column, note that this column has to exist.
+    :param alias: The name for the derived column.
     """
 
     extractor: T_EXTRACTOR = dataclasses.field()
     alias: str = dataclasses.field()
 
 
-def generate_more_columns(
+def add_derived_columns(
     df: pl.DataFrame,
     derived_columns: T.List[DerivedColumn],
 ) -> pl.DataFrame:
     """
-    Generate more columns based on the given derived_columns.
+    Add new columns to the DataFrame based on the given ``derived_columns`` specifications.
 
-    For example:
+    :return: DataFrame with new columns added.
 
-        >>> import polars as pl
-        >>> df = pl.DataFrame({"id": ["id-1", "id-2", "id-3"]})
-        >>> derived_columns = [
-        ...     DerivedColumn(
-        ...         extractor="id",
-        ...         alias="record_id_1",
-        ...     ),
-        ...     DerivedColumn(
-        ...         extractor=pl.col("id").str.split().list.last(),
-        ...         alias="record_id_2",
-        ...     ),
-        ... ]
-        >>> generate_more_columns(df, derived_columns)
-        ┌──────┬─────────────┬─────────────┐
-        │ id   ┆ record_id_1 ┆ record_id_2 │
-        │ ---  ┆ ---         ┆ ---         │
-        │ str  ┆ str         ┆ str         │
-        ╞══════╪═════════════╪═════════════╡
-        │ id-1 ┆ id-1        ┆ 1           │
-        │ id-2 ┆ id-2        ┆ 2           │
-        │ id-3 ┆ id-3        ┆ 3           │
-        └──────┴─────────────┴─────────────┘
+    **Example**
+
+    >>> import polars as pl
+    >>> df = pl.DataFrame({"id": ["id-1", "id-2", "id-3"]})
+    >>> derived_columns = [
+    ...     DerivedColumn(
+    ...         extractor="id",
+    ...         alias="record_id_1",
+    ...     ),
+    ...     DerivedColumn(
+    ...         extractor=pl.col("id").str.split().list.last(),
+    ...         alias="record_id_2",
+    ...     ),
+    ... ]
+    >>> add_derived_columns(df, derived_columns)
+    ┌──────┬─────────────┬─────────────┐
+    │ id   ┆ record_id_1 ┆ record_id_2 │
+    │ ---  ┆ ---         ┆ ---         │
+    │ str  ┆ str         ┆ str         │
+    ╞══════╪═════════════╪═════════════╡
+    │ id-1 ┆ id-1        ┆ 1           │
+    │ id-2 ┆ id-2        ┆ 2           │
+    │ id-3 ┆ id-3        ┆ 3           │
+    └──────┴─────────────┴─────────────┘
     """
     df_schema = df.schema
     for derived_column in derived_columns:
@@ -180,61 +218,54 @@ def generate_more_columns(
     return df
 
 
-def get_filename(filename: T.Optional[str]) -> str:
-    """
-    A valid file name should not contain any dot and file extension,
-    the write engine will append the file extension based on the compression
-    automatically. This function will remove anything after the first dot.
-
-    Example:
-
-        >>> get_filename()
-        'a1b2c3d4-a1b2-a1b2-a1b2-a1b2c3d4e5f6'
-        >>> get_filename("2021-01-01.parquet")
-        '2021-01-01'
-        >>> get_filename("2021-01-01.snappy.parquet")
-        '2021-01-01'
-    """
-    if filename is None:
-        return f"{uuid.uuid4()}"
-    else:
-        filename.split(".")
-
-
 @dataclasses.dataclass
 class StagingFileGroupManifestFile(ManifestFile):
-    pass
+    """
+    Represents a group of staging files.
+    """
 
 
 def process_db_snapshot_file_group_manifest_file(
     db_snapshot_file_group_manifest_file: DBSnapshotFileGroupManifestFile,
-    df: pl.DataFrame,
     s3_client: "S3Client",
+    s3_loc: S3Location,
+    batch_read_snapshot_data_file_func: T_BatchReadSnapshotDataFileCallable,
     extract_record_id: DerivedColumn,
     extract_create_time: DerivedColumn,
     extract_update_time: DerivedColumn,
     extract_partition_keys: T.List[DerivedColumn],
-    s3_loc: S3Location,
     polars_write_parquet_kwargs: T_OPTIONAL_KWARGS = None,
     s3pathlib_write_bytes_kwargs: T_OPTIONAL_KWARGS = None,
     logger=dummy_logger,
 ) -> StagingFileGroupManifestFile:
     """
-    Convert the Snapshot Data File to many Staging Data Files, based on the
-    number of partition keys.
+    Transform Snapshot Data Files to Staging Data Files, based on partition keys.
 
-    :param n_lines: if you want to read only the first n lines, then specify it.
-        this is very useful for debugging.
-    :param polars_dataframe_kwargs: custom keyword arguments for
-        ``polars.DataFrame``. Default is ``None``.
-    :param polars_write_parquet_kwargs: custom keyword arguments for
-        ``polars.DataFrame.write_parquet``. Default is ``dict(compression="snappy")``.
+    This function processes a group of snapshot files, derives necessary columns,
+    partitions the data if needed, and writes the results to S3 as staging files.
+
+
+    :param db_snapshot_file_group_manifest_file: Manifest file for the snapshot group.
+    :param df: DataFrame containing the snapshot data.
+    :param s3_client: Boto3 S3 client.
+    :param extract_record_id: Specification for deriving record ID.
+    :param extract_create_time: Specification for deriving creation time.
+    :param extract_update_time: Specification for deriving update time.
+    :param extract_partition_keys: Specifications for deriving partition keys.
+    :param s3_loc: S3 location information.
+    :param polars_write_parquet_kwargs: Custom keyword arguments for Polars' write_parquet method.
+        Default is ``dict(compression="snappy")``.
+    :param s3pathlib_write_bytes_kwargs: Custom keyword arguments for S3Path's write_bytes method.
+    :param logger: Logger object for logging operations.
     """
     # Derive more columns for data lake
     logger.info(
         "Derive record_id, create_time, update_time, and partition keys columns ..."
     )
-    df = generate_more_columns(
+    df = batch_read_snapshot_data_file_func(
+        db_snapshot_file_group_manifest_file=db_snapshot_file_group_manifest_file,
+    )
+    df = add_derived_columns(
         df,
         [
             extract_record_id,
@@ -243,6 +274,7 @@ def process_db_snapshot_file_group_manifest_file(
             *extract_partition_keys,
         ],
     )
+    logger.info(f"  Dataframe Shape {df.shape}")
 
     # prepare variables for following operations
     if polars_write_parquet_kwargs is None:

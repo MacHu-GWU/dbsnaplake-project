@@ -6,53 +6,38 @@ Staging Data File to Final Datalake.
 """
 
 import typing as T
-import math
 import dataclasses
 
 import polars as pl
 from s3pathlib import S3Path
 from s3manifesto.api import KeyEnum, ManifestFile
 
-from .typehint import T_RECORD
-from .typehint import T_DF_SCHEMA
-from .typehint import T_EXTRACTOR
 from .typehint import T_OPTIONAL_KWARGS
-from .utils import repr_data_size
 from .s3_loc import S3Location
-from .partition import Partition
-from .partition import extract_partition_data
-from .partition import encode_hive_partition
-from .partition import get_s3dir_partition
-from .partition import get_partitions
-from .polars_utils import write_parquet_to_s3
 from .polars_utils import write_data_file
 from .polars_utils import read_parquet_from_s3
 from .polars_utils import read_many_parquet_from_s3
-from .polars_utils import group_by_partition
-from .compaction import get_merged_schema
-from .compaction import harmonize_schemas
 from .logger import dummy_logger
-from .snapshot_to_staging import DBSnapshotManifestFile
-from .snapshot_to_staging import DBSnapshotFileGroupManifestFile
-from .snapshot_to_staging import batch_read_snapshot_data_file
-from .snapshot_to_staging import DerivedColumn
-from .snapshot_to_staging import StagingFileGroupManifestFile
-from .snapshot_to_staging import process_db_snapshot_file_group_manifest_file
 
 if T.TYPE_CHECKING:  # pragma: no cover
     from mypy_boto3_s3.client import S3Client
 
 
-def extract_s3dir(
+def extract_s3_directory(
     s3uri_col_name: str,
     s3dir_col_name: str,
 ) -> pl.Expr:
     """
-    Let's say there is a DataFrame with a column named "s3uri_col_name" that
-    contains a lot of s3 uri strings like this "s3://bucket/path/to/file".
-    This function returns a polars expression that can generate a new column
-    named "s3dir_col_name" that contains the directory part of the s3 uri,
-    like this "s3://bucket/path/to/" (with the trailing slash).
+    Generate a Polars expression to extract the directory part of S3 URIs.
+
+    :param s3uri_col_name: Name of the column containing S3 URIs.
+    :param s3dir_col_name: Name for the new column to store S3 directories.
+
+    :return: Polars expression for extracting S3 directories.
+
+    Example:
+        If "s3uri_col_name" contains ``s3://bucket/path/to/file``,
+        the resulting "s3dir_col_name" will contain ``s3://bucket/path/to/``.
     """
     return pl.concat_str(
         [
@@ -73,6 +58,15 @@ PARTITION_URI = "partition_uri"
 
 @dataclasses.dataclass
 class PartitionFileGroupManifestFile(ManifestFile):
+    """
+    Represents a group of files across many partitions in the staging area.
+
+    This class extends
+    `ManifestFile <https://s3manifesto.readthedocs.io/en/latest/s3manifesto/manifest.html#module-s3manifesto.manifest>`_
+    to provide specific functionality for handling partition file groups during
+    the compaction process.
+    """
+
     @classmethod
     def plan_partition_compaction(
         cls,
@@ -80,6 +74,19 @@ class PartitionFileGroupManifestFile(ManifestFile):
         s3_client: "S3Client",
         target_size: int = 128_000_000,  # 128 MB
     ):
+        """
+        Plan the compaction of partition file groups.
+
+        This method reads staging file group manifests, groups them by partition,
+        and creates new partition file group manifests for compaction.
+
+        :param s3_loc: S3 location information.
+        :param s3_client: Boto3 S3 client.
+        :param target_size: Target size for compacted files. Default is 128 MB.
+
+        :return: List of planned partition file group manifests.
+        """
+        # read all staging file group manifest files
         s3path_list = s3_loc.s3dir_staging_file_group_manifest_data.iter_objects(
             bsm=s3_client
         ).all()
@@ -87,8 +94,12 @@ class PartitionFileGroupManifestFile(ManifestFile):
             s3path_list=s3path_list,
             s3_client=s3_client,
         )
+
+        # group by partition
         df = df.with_columns(
-            extract_s3dir(s3uri_col_name=KeyEnum.URI, s3dir_col_name=PARTITION_URI),
+            extract_s3_directory(
+                s3uri_col_name=KeyEnum.URI, s3dir_col_name=PARTITION_URI
+            ),
         )
         partition_file_group_manifest_file_list = list()
         for ith_partition, ((partition_uri,), sub_df) in enumerate(
@@ -105,6 +116,8 @@ class PartitionFileGroupManifestFile(ManifestFile):
                     calculate=True,
                 )
             )
+
+            # with in each partition, group files into tasks by size
             for ith, (
                 file_group,
                 total_size,
@@ -134,11 +147,19 @@ class PartitionFileGroupManifestFile(ManifestFile):
         return partition_file_group_manifest_file_list
 
     @classmethod
-    def read_many(
+    def read_all_groups(
         cls,
         s3_loc: S3Location,
         s3_client: "S3Client",
-    ):
+    ) -> T.List["PartitionFileGroupManifestFile"]:
+        """
+        Read all partition file group manifest files from the specified S3 location.
+
+        :param s3_loc: S3 location information.
+        :param s3_client: Boto3 S3 client.
+
+        :returns: List of all file group manifest files.
+        """
         s3path_list = s3_loc.s3dir_partition_file_group_manifest_summary.iter_objects(
             bsm=s3_client,
         ).all()
@@ -151,103 +172,44 @@ class PartitionFileGroupManifestFile(ManifestFile):
         ]
         return partition_file_group_manifest_file_list
 
-    # for s3path_manifest_summary in s3path_manifest_summary_list:
-    #     manifest_file = ManifestFile.read(
-    #         uri_summary=s3path_manifest_summary.uri,
-    #         s3_client=s3_client,
-    #     )
-    #     for data_file in manifest_file.data_file_list:
-    #         s3path = data_file[KeyEnum.URI]
-    #         try:
-    #             partition_mapping[s3path.parent.uri].append(data_file)
-    #         except KeyError:
-    #             partition_mapping[s3path.parent.uri] = [data_file]
-    #
-    # for s3uri_partition, data_file_list in partition_mapping.items():
-    #     manifest_file = ManifestFile.new(
-    #         uri_summary=s3uri_partition,
-    #         data_file_list=data_file_list,
-    #     )
-    #
-    # data_file_list = list()
-    # for s3path in partition.list_parquet_files():
-    #     staging_data_file = StagingDataFile(
-    #         uri=s3path.uri,
-    #         size=s3path.size,
-    #     )
-    #     data_file_list.append(staging_data_file)
-    # manifest_file = ManifestFile(
-    #     uri="...",
-    #     data_file_list=data_file_list,
-    # )
-    # data_file_group_list = manifest_file.group_files_into_tasks(
-    #     target_size=128_000_000,  # 128MB is optimal for parquet file
-    # )
-    # return data_file_group_list
 
-
-# @dataclasses.dataclass
-# class DatalakeDataFile:
-#     """
-#     Represent a parquet data file in datalake. It is the result of compaction
-#     of multiple :class:`StagingDataFile`.
-#
-#     :param uri: S3 URI of the data file.
-#     :param n_records: Number of records in the data file.
-#     :param staging_partition_uri: which staging partition the data file comes from.
-#     """
-#
-#     uri: str = dataclasses.field()
-#     n_records: int = dataclasses.field()
-#     staging_partition_uri: str = dataclasses.field()
-#
-#     @property
-#     def s3path(self) -> S3Path:
-#         return S3Path.from_s3_uri(self.uri)
-#
-#     def write_parquet_to_s3(
-#         self,
-#         df: pl.DataFrame,
-#         s3_client: "S3Client",
-#         polars_write_parquet_kwargs: T_OPTIONAL_KWARGS = None,
-#         s3pathlib_write_bytes_kwargs: T_OPTIONAL_KWARGS = None,
-#     ):
-#         if s3pathlib_write_bytes_kwargs is None:
-#             s3pathlib_write_bytes_kwargs = {}
-#         s3pathlib_write_bytes_kwargs["content_type"] = "application/x-parquet"
-#         more_metadata = {
-#             S3_METADATA_KEY_N_RECORDS: str(df.shape[0]),
-#             S3_METADATA_KEY_STAGING_PARTITION: self.staging_partition_uri,
-#         }
-#         if "metadata" in s3pathlib_write_bytes_kwargs:
-#             s3pathlib_write_bytes_kwargs["metadata"].update(more_metadata)
-#         else:
-#             s3pathlib_write_bytes_kwargs["metadata"] = more_metadata
-#         return write_parquet_to_s3(
-#             df=df,
-#             s3path=self.s3path,
-#             s3_client=s3_client,
-#             polars_write_parquet_kwargs=polars_write_parquet_kwargs,
-#             s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
-#         )
-
-
-def execute_compaction(
+def process_partition_file_group_manifest_file(
     partition_file_group_manifest_file: PartitionFileGroupManifestFile,
     s3_client: "S3Client",
     s3_loc: S3Location,
-    update_at_col: str,
+    sort_by: T.Optional[T.List[str]] = None,
+    descending: T.Optional[T.List[bool]] = None,
     polars_write_parquet_kwargs: T_OPTIONAL_KWARGS = None,
     s3pathlib_write_bytes_kwargs: T_OPTIONAL_KWARGS = None,
     logger=dummy_logger,
 ) -> S3Path:
+    """
+    Execute the compaction process for a partition file group.
+
+    This function reads all data files in the manifest, (optional) sorts them by
+    the specified fields, and writes a single compacted file to the final
+    data lake location.
+
+    :param partition_file_group_manifest_file: Manifest file for the partition group.
+    :param s3_client: Boto3 S3 client.
+    :param s3_loc: S3 location information.
+    :param sort_by: List of column names to sort by.
+    :param descending: List of boolean values to specify descending order.
+    :param update_at_col: Name of the column used for sorting and updating.
+    :param polars_write_parquet_kwargs: Custom keyword arguments for Polars' write_parquet method.
+    :param s3pathlib_write_bytes_kwargs: Custom keyword arguments for S3Path's write_bytes method.
+    :param logger: logger for logging operations.
+
+    :return: S3 path of the compacted file in the data lake.
+    """
     partition_uri = partition_file_group_manifest_file.details[PARTITION_URI]
     s3dir_partition = S3Path.from_s3_uri(partition_uri)
     logger.info(f"Execute compaction on partition: {partition_uri}")
     logger.info(f"  preview output at: {s3dir_partition.console_url}")
 
     # Read all the data file in this manifest, sort by update_at_col
-    logger.info(f"Read all staging data files and sort by {update_at_col!r} column ...")
+    logger.info(f"Read all staging data files ...")
+    logger.info("and sort by {update_at_col!r} column")
     sub_df_list = list()
     for data_file in partition_file_group_manifest_file.data_file_list:
         uri = data_file[KeyEnum.URI]
@@ -256,6 +218,9 @@ def execute_compaction(
         sub_df = read_parquet_from_s3(s3path=s3path, s3_client=s3_client)
         sub_df_list.append(sub_df)
     df = pl.concat(sub_df_list)
+
+    if sort_by:
+        df = df.sort(by=sort_by, descending=descending)
 
     _relpath = s3dir_partition.relative_to(s3_loc.s3dir_staging_datalake)
     s3dir_datalake_partition = s3_loc.s3dir_datalake.joinpath(_relpath)

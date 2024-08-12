@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 
+"""
+Provide the default logger that has no effect.
+"""
 
-class DummyLogger:
+class DummyLogger: # pragma: no cover
     def debug(self, msg: str):
         pass
 

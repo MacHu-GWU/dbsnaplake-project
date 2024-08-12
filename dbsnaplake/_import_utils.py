@@ -22,13 +22,13 @@ from .compaction import harmonize_schemas
 from .logger import dummy_logger
 from .snapshot_to_staging import DBSnapshotManifestFile
 from .snapshot_to_staging import DBSnapshotFileGroupManifestFile
-from .snapshot_to_staging import batch_read_snapshot_data_file
 from .snapshot_to_staging import DerivedColumn
 from .snapshot_to_staging import StagingFileGroupManifestFile
+from .snapshot_to_staging import T_BatchReadSnapshotDataFileCallable
 from .snapshot_to_staging import process_db_snapshot_file_group_manifest_file
-from .staging_to_datalake import extract_s3dir
+from .staging_to_datalake import extract_s3_directory
 from .staging_to_datalake import PartitionFileGroupManifestFile
-from .staging_to_datalake import execute_compaction
+from .staging_to_datalake import process_partition_file_group_manifest_file
 from .project import step_1_1_plan_snapshot_to_staging
 from .project import step_1_2_get_snapshot_to_staging_todo_list
 from .project import step_1_3_process_db_snapshot_file_group_manifest_file

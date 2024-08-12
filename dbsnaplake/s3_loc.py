@@ -1,7 +1,18 @@
 # -*- coding: utf-8 -*-
 
 """
-S3 Location
+This module provides a structured way to manage and interact with S3 locations
+in the ETL pipeline. It defines the S3Location class, which encapsulates
+the logic for constructing and accessing various S3 paths used throughout the
+ETL process.
+
+The S3Location class handles two main areas:
+
+1. Staging area: Temporary storage for processed data and manifests.
+2. Data lake: Final storage location for optimized data.
+
+This module is crucial for maintaining a consistent and organized S3 structure
+throughout the pipeline, facilitating efficient data processing and retrieval.
 """
 
 import typing as T
@@ -27,46 +38,10 @@ if T.TYPE_CHECKING:  # pragma: no cover
 @dataclasses.dataclass
 class S3Location:
     """
-    在从 DB Snapshot 到 DataLake 的过程中, 我们的策略是是将数据按照 partition 放到
-    staging 目录, 然后再将 staging 目录中的数据进行 compaction, 再写入到 datalake 目录.
-    这个类用于管理 staging 和 datalake 目录的 S3 URI.
+    Example:
 
-    .. code-block:: python
-
-        s3://bucket/prefix/staging/
-            manifests/
-                snapshot-file-groups/
-
-                staging-file-groups/
-                partition-file-groups/
-                    manifest-summary/
-                        manifest-summary-1.json
-                        manifest-summary-2.json
-                        ...
-                    manifest-data/
-                        manifest-data-1.parquet
-                        manifest-data-2.parquet
-                        ...
-
-            datalake/
-                ${database_name}/
-                    ${schema_name}/
-                        ${table_name}/
-                            {snapshot_id}/
-                                ${partition_key1}=${partition_key1_value}/
-                                    ${partition_key2}=${partition_key2_value}/
-                                        .../
-                                            ${staging_data_file}
-
-        s3://bucket/prefix/datalake/
-            ${database_name}/
-                ${schema_name}/
-                    ${table_name}/
-                        ${partition_key1}=${partition_key1_value}/
-                                ${partition_key2}=${partition_key2_value}/
-                                    .../
-                                        ${data_file}
-
+        >>> s3uri_staging = "s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/"
+        >>> s3uri_datalake = "s3://bucket/prefix/datalake/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/"
     """
 
     s3uri_staging: str = dataclasses.field()
@@ -86,48 +61,98 @@ class S3Location:
 
     @property
     def s3dir_staging_manifest(self) -> S3Path:
+        """
+        Example::
+
+            s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/manifests/
+        """
         return (self.s3dir_staging / MANIFESTS_FOLDER).to_dir()
 
     @property
     def s3dir_snapshot_file_group_manifest(self) -> S3Path:
+        """
+        Example::
+
+            s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/manifests/snapshot-file-groups/
+        """
         return (self.s3dir_staging_manifest / SNAPSHOT_FILE_GROUPS_FOLDER).to_dir()
 
     @property
     def s3dir_snapshot_file_group_manifest_summary(self) -> S3Path:
+        """
+        Example::
+
+            s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/manifests/snapshot-file-groups/manifest-summary/
+        """
         return (
             self.s3dir_snapshot_file_group_manifest / MANIFEST_SUMMARY_FOLDER
         ).to_dir()
 
     @property
     def s3dir_snapshot_file_group_manifest_data(self) -> S3Path:
+        """
+        Example::
+
+            s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/manifests/snapshot-file-groups/manifest-data/
+        """
         return (self.s3dir_snapshot_file_group_manifest / MANIFEST_DATA_FOLDER).to_dir()
 
     @property
     def s3dir_staging_file_group_manifest(self) -> S3Path:
+        """
+        Example::
+
+            s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/manifests/staging-file-groups/
+        """
         return (self.s3dir_staging_manifest / STAGING_FILE_GROUPS_FOLDER).to_dir()
 
     @property
     def s3dir_staging_file_group_manifest_summary(self) -> S3Path:
+        """
+        Example::
+
+            s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/manifests/staging-file-groups/manifest-summary/
+        """
         return (
             self.s3dir_staging_file_group_manifest / MANIFEST_SUMMARY_FOLDER
         ).to_dir()
 
     @property
     def s3dir_staging_file_group_manifest_data(self) -> S3Path:
+        """
+        Example::
+
+            s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/manifests/staging-file-groups/manifest-data/
+        """
         return (self.s3dir_staging_file_group_manifest / MANIFEST_DATA_FOLDER).to_dir()
 
     @property
     def s3dir_partition_file_group_manifest(self) -> S3Path:
+        """
+        Example::
+
+            s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/manifests/partition-file-groups/
+        """
         return (self.s3dir_staging_manifest / PARTITION_FILE_GROUPS_FOLDER).to_dir()
 
     @property
     def s3dir_partition_file_group_manifest_summary(self) -> S3Path:
+        """
+        Example::
+
+            s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/manifests/partition-file-groups/manifest-summary/
+        """
         return (
             self.s3dir_partition_file_group_manifest / MANIFEST_SUMMARY_FOLDER
         ).to_dir()
 
     @property
     def s3dir_partition_file_group_manifest_data(self) -> S3Path:
+        """
+        Example::
+
+            s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/manifests/partition-file-groups/manifest-data/
+        """
         return (
             self.s3dir_partition_file_group_manifest / MANIFEST_DATA_FOLDER
         ).to_dir()
@@ -137,15 +162,25 @@ class S3Location:
         return (self.s3dir_staging / DATALAKE_FOLDER).to_dir()
 
     def iter_staging_datalake_partition(
-        self, s3_client: "S3Client"
-    ) -> T.List[Partition]:
+        self,
+        s3_client: "S3Client",
+    ) -> T.List[Partition]:  # pragma: no cover
+        """
+        List all partitions in the staging datalake folder.
+        """
         return get_partitions(
             s3_client=s3_client,
             s3dir_root=self.s3dir_staging_datalake,
         )
 
-    def get_s3dir_staging_datalake_partition(self, kvs: T.Dict[str, str]) -> S3Path:
+    def get_s3dir_staging_datalake_partition(
+        self, kvs: T.Dict[str, str]
+    ) -> S3Path:  # pragma: no cover
+        """ """
         return (self.s3dir_staging_datalake / encode_hive_partition(kvs)).to_dir()
 
-    def get_s3dir_datalake_partition(self, kvs: T.Dict[str, str]) -> S3Path:
+    def get_s3dir_datalake_partition(
+        self, kvs: T.Dict[str, str]
+    ) -> S3Path:  # pragma: no cover
+        """ """
         return (self.s3dir_datalake / encode_hive_partition(kvs)).to_dir()
