@@ -41,7 +41,7 @@ class S3Location:
     Example:
 
         >>> s3uri_staging = "s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/"
-        >>> s3uri_datalake = "s3://bucket/prefix/datalake/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/"
+        >>> s3uri_datalake = "s3://bucket/prefix/datalake/mydatabase/mytable/snapshot=2021_01_01_08_30_00/"
     """
 
     s3uri_staging: str = dataclasses.field()

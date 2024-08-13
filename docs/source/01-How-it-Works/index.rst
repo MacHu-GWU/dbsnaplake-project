@@ -94,16 +94,15 @@ The Staging datalake S3 location serves as a transitional storage area in the db
     # we need to do some optimization before moving the data to the real datalake
     # ------------------------------------------------------------------------------
     s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/datalake/
-        ${database_name}/${schema_name}/${table_name}/
-            ${partition_key1}=${partition_key1_value}/${partition_key2}=${partition_key2_value}/.../
-                ${staging_data_file_1}
-                ${staging_data_file_2}
-                ...
-            ${partition_key1}=${partition_key1_value}/${partition_key2}=${partition_key2_value}/.../
-                ${staging_data_file_1}
-                ${staging_data_file_2}
-                ...
+        ${partition_key1}=${partition_key1_value}/${partition_key2}=${partition_key2_value}/.../
+            ${staging_data_file_1}
+            ${staging_data_file_2}
             ...
+        ${partition_key1}=${partition_key1_value}/${partition_key2}=${partition_key2_value}/.../
+            ${staging_data_file_1}
+            ${staging_data_file_2}
+            ...
+        ...
 
 
 Partition file Groups
@@ -125,18 +124,44 @@ An orchestrator scans the staging datalake, identifying small files within each 
 
 Datalake Area
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The final datalake folder structure is shown as below.
+The data lake area is the final destination for processed and optimized data. It serves as the root folder for the output data lake, where it represents a "Table".
+
+1. Historical Snapshots:
+   To maintain a history of table snapshots, use a naming convention that includes the snapshot timestamp: ``s3://bucket/prefix/datalake/mydatabase/mytable_YYYY_MM_DD_HH_MM_SS/``
+2. Latest Data Only:
+    To keep only the most recent data, use a static table name: ``s3://bucket/prefix/datalake/mydatabase/mytable/``
+
+Let's assume that the data lake root folder is:
 
 .. code-block:: python
 
-    s3://bucket/prefix/datalake/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/
-        ${database_name}/${schema_name}/${table_name}/
-                    ${partition_key1}=${partition_key1_value}/${partition_key2}=${partition_key2_value}/.../
-                        ${data_file_1}
-                        ${data_file_2}
-                        ...
-                    ${partition_key1}=${partition_key1_value}/${partition_key2}=${partition_key2_value}/.../
-                        ${data_file_1}
-                        ${data_file_2}
-                        ...
-                    ...
+    s3://bucket/prefix/staging/mydatabase/mytable_2021_01_01_08_30_00/
+
+Within each table folder, data is organized by partition keys and stored in optimized file formats (e.g., Parquet). Here's an example of the hierarchical structure:
+
+.. code-block:: python
+
+    s3://bucket/prefix/staging/mydatabase/mytable_2021_01_01_08_30_00/
+        ${partition_key1}=${partition_key1_value}/${partition_key2}=${partition_key2_value}/.../
+            ${data_file_1}
+            ${data_file_2}
+            ...
+        ${partition_key1}=${partition_key1_value}/${partition_key2}=${partition_key2_value}/.../
+            ${data_file_1}
+            ${data_file_2}
+            ...
+        ...
+
+
+S3 Location
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+:class:`~dbsnaplake.s3_loc.S3Location`
+
+.. code-block:: python
+
+    from dbsnaplake.api import S3Location
+
+    s3_loc = S3Location(
+        s3uri_staging="s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/",
+        s3uri_datalake="s3://bucket/prefix/staging/mydatabase/mytable_2021_01_01_08_30_00/"
+    )

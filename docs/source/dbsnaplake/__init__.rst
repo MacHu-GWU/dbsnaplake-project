@@ -14,7 +14,6 @@ sub packages and modules
     api <api>
     compaction <compaction>
     constants <constants>
-    lambda_function <lambda_function>
     logger <logger>
     partition <partition>
     polars_utils <polars_utils>
