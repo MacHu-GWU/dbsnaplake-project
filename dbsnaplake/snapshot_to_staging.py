@@ -244,7 +244,6 @@ def process_db_snapshot_file_group_manifest_file(
     This function processes a group of snapshot files, derives necessary columns,
     partitions the data if needed, and writes the results to S3 as staging files.
 
-
     :param db_snapshot_file_group_manifest_file: Manifest file for the snapshot group.
     :param df: DataFrame containing the snapshot data.
     :param s3_client: Boto3 S3 client.

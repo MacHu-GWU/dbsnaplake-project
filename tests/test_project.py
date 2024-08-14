@@ -3,7 +3,8 @@
 import dataclasses
 
 import polars as pl
-from s3pathlib import S3Path, context
+from s3pathlib import S3Path
+from pynamodb_mate.api import Connection
 from s3manifesto.api import KeyEnum
 
 from dbsnaplake._import_utils import read_many_parquet_from_s3
@@ -102,7 +103,16 @@ class Test(BaseMockAwsTest):
             sort_by=["update_time"],
             descending=[True],
             target_parquet_file_size=target_parquet_file_size,
+            tracker_table_name="dbsnaplake-tracker",
+            aws_region="us-east-1",
+            use_case_id="test",
         )
+
+        with cls.bsm.awscli():
+            cls.project.tracker_model._connection = None
+            cls.project.tracker_model.Meta.region = cls.bsm.aws_region
+            conn = Connection(region=cls.bsm.aws_region)
+            cls.project.tracker_model.create_table(wait=True)
 
     def run_analysis(self):
         s3path_list = self.project.s3_loc.s3dir_datalake.iter_objects(
@@ -117,13 +127,13 @@ class Test(BaseMockAwsTest):
 
     def _test(self):
         with logger.disabled(
-            disable=True,  # no log
-            # disable=False,  # show log
+            # disable=True,  # no log
+            disable=False,  # show log
         ):
             self.project.step_1_1_plan_snapshot_to_staging()
         with logger.disabled(
-            disable=True,  # no log
-            # disable=False,  # show log
+            # disable=True,  # no log
+            disable=False,  # show log
         ):
             self.project.step_1_2_process_db_snapshot_file_group_manifest_file()
         with logger.disabled(
@@ -144,11 +154,12 @@ class Test(BaseMockAwsTest):
 
         # no partition
         with logger.disabled(
-            disable=True,  # no log
-            # disable=False,  # show log
+            # disable=True,  # no log
+            disable=False,  # show log
         ):
             self.project.s3_loc.s3dir_staging.delete()
             self.project.s3_loc.s3dir_datalake.delete()
+            self.project.tracker_model.delete_all()
             self.project.extract_partition_keys = list()
             self.project.step_1_1_plan_snapshot_to_staging()
             self.project.step_1_2_process_db_snapshot_file_group_manifest_file()

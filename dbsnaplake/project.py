@@ -68,6 +68,8 @@ from .snapshot_to_staging import T_BatchReadSnapshotDataFileCallable
 from .snapshot_to_staging import process_db_snapshot_file_group_manifest_file
 from .staging_to_datalake import PartitionFileGroupManifestFile
 from .staging_to_datalake import process_partition_file_group_manifest_file
+from .tracker import create_orm_model
+from .tracker import T_TASK
 
 if T.TYPE_CHECKING:  # pragma: no cover
     from mypy_boto3_s3.client import S3Client
@@ -98,7 +100,7 @@ def step_1_1_plan_snapshot_to_staging(
     db_snapshot_manifest_file: DBSnapshotManifestFile,
     target_size: int,
     logger=dummy_logger,
-):
+) -> T.List[DBSnapshotFileGroupManifestFile]:
     print_manifest_file_info(
         manifest_file=db_snapshot_manifest_file,
         logger=logger,
@@ -114,6 +116,7 @@ def step_1_1_plan_snapshot_to_staging(
         )
     )
     logger.info(f"  got {len(db_snapshot_file_group_manifest_file_list)} groups")
+    return db_snapshot_file_group_manifest_file_list
 
 
 def step_1_2_get_snapshot_to_staging_todo_list(
@@ -168,7 +171,7 @@ def step_2_1_plan_staging_to_datalake(
     s3_loc: S3Location,
     target_size: int = 128_000_000,  # 128 MB
     logger=dummy_logger,
-):
+) -> T.List[PartitionFileGroupManifestFile]:
     logger.info(
         f"Merge partition data files into {repr_data_size(target_size)} sized files"
     )
@@ -230,6 +233,24 @@ logger = VisLog(name="dbsnaplake", log_format="%(message)s")
 
 @dataclasses.dataclass
 class Project:
+    """
+    :param s3_client:
+    :param s3uri_db_snapshot_manifest_summary:
+    :param s3uri_staging:
+    :param s3uri_datalake:
+    :param target_db_snapshot_file_group_size:
+    :param extract_record_id:
+    :param extract_create_time:
+    :param extract_update_time:
+    :param extract_partition_keys:
+    :param sort_by:
+    :param descending:
+    :param target_parquet_file_size:
+    :param tracker_table_name:
+    :param aws_region:
+    :param use_case_id:
+    """
+
     s3_client: "S3Client" = dataclasses.field()
     s3uri_db_snapshot_manifest_summary: str = dataclasses.field()
     s3uri_staging: str = dataclasses.field()
@@ -242,6 +263,9 @@ class Project:
     sort_by: T.List[str] = dataclasses.field()
     descending: T.List[bool] = dataclasses.field()
     target_parquet_file_size: int = dataclasses.field()
+    tracker_table_name: str = dataclasses.field()
+    aws_region: str = dataclasses.field()
+    use_case_id: str = dataclasses.field()
 
     @cached_property
     def s3_loc(self) -> S3Location:
@@ -264,17 +288,42 @@ class Project:
     ) -> pl.DataFrame:
         raise NotImplementedError
 
+    @cached_property
+    def tracker_model(self) -> T.Type[T_TASK]:
+        """
+        The DynamoDB ORM model for tracker.
+        """
+        return create_orm_model(
+            tracker_table_name=self.tracker_table_name,
+            aws_region=self.aws_region,
+            use_case_id=self.use_case_id,
+        )
+
     @logger.start_and_end(
         msg="{func_name}",
     )
     def step_1_1_plan_snapshot_to_staging(self):
-        step_1_1_plan_snapshot_to_staging(
-            s3_client=self.s3_client,
-            s3_loc=self.s3_loc,
-            db_snapshot_manifest_file=self.db_snapshot_manifest_file,
-            target_size=self.target_db_snapshot_file_group_size,
-            logger=logger,
-        )
+        task_id = "step_1_1_plan_snapshot_to_staging"
+        Task = self.tracker_model
+        task = Task.get_one_or_none(task_id=task_id)
+        if task is None:
+            Task.make_and_save(task_id=task_id)
+
+        with Task.start(task_id=task_id, debug=True) as exec_ctx:
+            db_snapshot_file_group_manifest_file_list = (
+                step_1_1_plan_snapshot_to_staging(
+                    s3_client=self.s3_client,
+                    s3_loc=self.s3_loc,
+                    db_snapshot_manifest_file=self.db_snapshot_manifest_file,
+                    target_size=self.target_db_snapshot_file_group_size,
+                    logger=logger,
+                )
+            )
+            n = len(db_snapshot_file_group_manifest_file_list)
+            exec_ctx.set_data({"n_db_snapshot_file_group_manifest_file": n})
+
+        # task = Task.get_one_or_none(task_id=task_id)  # for debug only
+        # print(task.attribute_values)  # for debug only
 
     @logger.start_and_end(
         msg="{func_name}",
@@ -295,28 +344,55 @@ class Project:
             db_snapshot_file_group_manifest_file
         ) in db_snapshot_file_group_manifest_file_list:
             with logger.nested():
-                new_step_1_3_process_db_snapshot_file_group_manifest_file(
-                    db_snapshot_file_group_manifest_file=db_snapshot_file_group_manifest_file,
-                    s3_client=self.s3_client,
-                    s3_loc=self.s3_loc,
-                    batch_read_snapshot_data_file_func=self.batch_read_snapshot_data_file,
-                    extract_record_id=self.extract_record_id,
-                    extract_create_time=self.extract_create_time,
-                    extract_update_time=self.extract_update_time,
-                    extract_partition_keys=self.extract_partition_keys,
-                    logger=logger,
-                )
+                task_id = f"step_1_2_process_db_snapshot_file_group_manifest_file_{db_snapshot_file_group_manifest_file.uri_summary}"
+                Task = self.tracker_model
+                task = Task.get_one_or_none(task_id=task_id)
+                if task is None:
+                    Task.make_and_save(task_id=task_id)
+
+                with Task.start(task_id=task_id, debug=True) as exec_ctx:
+                    staging_file_group_manifest_file: StagingFileGroupManifestFile = (
+                        new_step_1_3_process_db_snapshot_file_group_manifest_file(
+                            db_snapshot_file_group_manifest_file=db_snapshot_file_group_manifest_file,
+                            s3_client=self.s3_client,
+                            s3_loc=self.s3_loc,
+                            batch_read_snapshot_data_file_func=self.batch_read_snapshot_data_file,
+                            extract_record_id=self.extract_record_id,
+                            extract_create_time=self.extract_create_time,
+                            extract_update_time=self.extract_update_time,
+                            extract_partition_keys=self.extract_partition_keys,
+                            logger=logger,
+                        )
+                    )
+                    uri = staging_file_group_manifest_file.uri_summary
+                    exec_ctx.set_data(
+                        {"staging_file_group_manifest_file_uri_summary": uri}
+                    )
+                # task = Task.get_one_or_none(task_id=task_id)  # for debug only
+                # print(task.attribute_values)  # for debug only
 
     @logger.start_and_end(
         msg="{func_name}",
     )
     def step_2_1_plan_staging_to_datalake(self):
-        step_2_1_plan_staging_to_datalake(
-            s3_client=self.s3_client,
-            s3_loc=self.s3_loc,
-            target_size=self.target_parquet_file_size,
-            logger=logger,
-        )
+        task_id = f"step_2_1_plan_staging_to_datalake"
+        Task = self.tracker_model
+        task = Task.get_one_or_none(task_id=task_id)
+        if task is None:
+            Task.make_and_save(task_id=task_id)
+
+        with Task.start(task_id=task_id, debug=True) as exec_ctx:
+            partition_file_group_manifest_file_list = step_2_1_plan_staging_to_datalake(
+                s3_client=self.s3_client,
+                s3_loc=self.s3_loc,
+                target_size=self.target_parquet_file_size,
+                logger=logger,
+            )
+            n = len(partition_file_group_manifest_file_list)
+            exec_ctx.set_data({"n_partition_file_group_manifest_file": n})
+
+        # task = Task.get_one_or_none(task_id=task_id)  # for debug only
+        # print(task.attribute_values)  # for debug only
 
     @logger.start_and_end(
         msg="{func_name}",
@@ -335,11 +411,21 @@ class Project:
             partition_file_group_manifest_file
         ) in partition_file_group_manifest_file_list:
             with logger.nested():
-                new_step_2_3_process_partition_file_group_manifest_file(
-                    partition_file_group_manifest_file=partition_file_group_manifest_file,
-                    s3_client=self.s3_client,
-                    s3_loc=self.s3_loc,
-                    sort_by=self.sort_by,
-                    descending=self.descending,
-                    logger=logger,
-                )
+                task_id = f"step_2_2_process_partition_file_group_manifest_file_{partition_file_group_manifest_file.uri_summary}"
+                Task = self.tracker_model
+                task = Task.get_one_or_none(task_id=task_id)
+                if task is None:
+                    Task.make_and_save(task_id=task_id)
+
+                with Task.start(task_id=task_id, debug=True) as exec_ctx:
+                    s3path = new_step_2_3_process_partition_file_group_manifest_file(
+                        partition_file_group_manifest_file=partition_file_group_manifest_file,
+                        s3_client=self.s3_client,
+                        s3_loc=self.s3_loc,
+                        sort_by=self.sort_by,
+                        descending=self.descending,
+                        logger=logger,
+                    )
+                    exec_ctx.set_data({"parquet_uri": s3path.uri})
+                # task = Task.get_one_or_none(task_id=task_id)  # for debug only
+                # print(task.attribute_values)  # for debug only
