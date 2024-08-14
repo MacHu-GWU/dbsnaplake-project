@@ -107,12 +107,7 @@ class Test(BaseMockAwsTest):
             aws_region="us-east-1",
             use_case_id="test",
         )
-
-        with cls.bsm.awscli():
-            cls.project.tracker_model._connection = None
-            cls.project.tracker_model.Meta.region = cls.bsm.aws_region
-            conn = Connection(region=cls.bsm.aws_region)
-            cls.project.tracker_model.create_table(wait=True)
+        cls.project.connect_dynamodb(bsm=cls.bsm)
 
     def run_analysis(self):
         s3path_list = self.project.s3_loc.s3dir_datalake.iter_objects(
@@ -159,7 +154,7 @@ class Test(BaseMockAwsTest):
         ):
             self.project.s3_loc.s3dir_staging.delete()
             self.project.s3_loc.s3dir_datalake.delete()
-            self.project.tracker_model.delete_all()
+            self.project.task_model_step_1_1_plan_snapshot_to_staging.delete_all()
             self.project.extract_partition_keys = list()
             self.project.step_1_1_plan_snapshot_to_staging()
             self.project.step_1_2_process_db_snapshot_file_group_manifest_file()
