@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
 
+"""
+Usage::
+
+    import dbsnaplake.api as dbsnaplake
+"""
+
 from . import constants
 from .typehint import T_RECORD
 from .typehint import T_DF_SCHEMA

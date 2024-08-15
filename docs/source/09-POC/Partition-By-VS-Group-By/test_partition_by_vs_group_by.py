@@ -1,10 +1,12 @@
+# -*- coding: utf-8 -*-
+
 import polars as pl
 import numpy as np
 from dbsnaplake.vendor.timer import DateTimeTimer
 
 # n_row = 1_000
-# n_row = 1_000_000
-n_row = 100_000_000
+n_row = 1_000_000
+# n_row = 100_000_000
 df = pl.DataFrame(
     {
         "year": np.random.randint(2001, 2010, n_row),
@@ -25,4 +27,3 @@ with DateTimeTimer("Method 2") as timer:
         kvs = dict(zip(pkeys, pvalues))
         sub_df.count()
         # print(kvs, sub_df)
-
