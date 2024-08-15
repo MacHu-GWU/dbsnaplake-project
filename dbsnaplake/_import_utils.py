@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
 
+"""
+Copy and paste this module to other module while developing.
+"""
+
 from . import constants
 from .typehint import T_RECORD
 from .typehint import T_DF_SCHEMA

@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 
 """
-Package Description.
+A framework that convert Any Database Snapshot to Analytical Friendly Data Lake.
 """
 
 from ._version import __version__
 
-__short_description__ = "Package short description."
-__license__ = "MIT"
+__short_description__ = "A framework that convert Any Database Snapshot to Analytical Friendly Data Lake."
+__license__ = "GPL"
 __author__ = "Sanhe Hu"
 __author_email__ = "husanhe@gmail.com"
 __maintainer__ = "Sanhe Hu"
