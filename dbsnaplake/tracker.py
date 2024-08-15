@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
 
+"""
+DynamoDB Status Tracker Module that for Business Critical Application,
+provide exact-once processing, fault tolerance, system monitoring features.
+"""
+
 import typing as T
-from datetime import datetime
 
 import pynamodb_mate.api as pm
 
@@ -24,6 +28,17 @@ def create_orm_model(
     aws_region: str,
     use_case_id: str,
 ) -> T.Type[T_TASK]:
+    """
+    Create a DynamoDB ORM Model for the Tracker Table.
+
+    :param tracker_table_name: Name of the Tracker Table.
+    :param aws_region: AWS Region of the Tracker Table.
+    :param use_case_id: Use Case ID of the Tracker Table. This will be part of
+        the naming convention of the DynamoDB partition key.
+
+    :return: ORM Model for the Tracker Table.
+    """
+
     class Task(st.BaseTask):
         class Meta:
             table_name = tracker_table_name

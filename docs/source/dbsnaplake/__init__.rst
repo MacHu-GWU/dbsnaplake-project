@@ -21,6 +21,7 @@ sub packages and modules
     s3_loc <s3_loc>
     snapshot_to_staging <snapshot_to_staging>
     staging_to_datalake <staging_to_datalake>
+    tracker <tracker>
     typehint <typehint>
     utils <utils>
     

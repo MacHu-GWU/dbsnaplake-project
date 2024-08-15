@@ -235,6 +235,7 @@ logger = VisLog(name="dbsnaplake", log_format="%(message)s")
 
 class UseCaseIdSuffixEnum:
     # fmt: off
+    step_0_prepare_db_snapshot_manifest = "step_0_prepare_db_snapshot_manifest"
     step_1_1_plan_snapshot_to_staging = "step_1_1_plan_snapshot_to_staging"
     step_1_2_process_db_snapshot_file_group_manifest_file = "step_1_2_process_db_snapshot_file_group_manifest_file"
     step_2_1_plan_staging_to_datalake = "step_2_1_plan_staging_to_datalake"
@@ -282,10 +283,10 @@ class Project:
     s3uri_staging: str = dataclasses.field()
     s3uri_datalake: str = dataclasses.field()
     target_db_snapshot_file_group_size: int = dataclasses.field()
-    extract_record_id: DerivedColumn = dataclasses.field()
-    extract_create_time: DerivedColumn = dataclasses.field()
-    extract_update_time: DerivedColumn = dataclasses.field()
-    extract_partition_keys: T.List[DerivedColumn] = dataclasses.field()
+    extract_record_id: T.Optional[DerivedColumn] = dataclasses.field()
+    extract_create_time: T.Optional[DerivedColumn] = dataclasses.field()
+    extract_update_time: T.Optional[DerivedColumn] = dataclasses.field()
+    extract_partition_keys: T.Optional[T.List[DerivedColumn]] = dataclasses.field()
     sort_by: T.List[str] = dataclasses.field()
     descending: T.List[bool] = dataclasses.field()
     target_parquet_file_size: int = dataclasses.field()
@@ -313,6 +314,14 @@ class Project:
         **kwargs,
     ) -> pl.DataFrame:
         raise NotImplementedError
+
+    @cached_property
+    def task_model_step_0_prepare_db_snapshot_manifest(self) -> T.Type[T_TASK]:
+        return create_orm_model(
+            tracker_table_name=self.tracker_table_name,
+            aws_region=self.aws_region,
+            use_case_id=f"{self.use_case_id}#{UseCaseIdSuffixEnum.step_0_prepare_db_snapshot_manifest}",
+        )
 
     @cached_property
     def task_model_step_1_1_plan_snapshot_to_staging(self) -> T.Type[T_TASK]:
@@ -354,6 +363,7 @@ class Project:
         with bsm.awscli():
             conn = Connection(region=bsm.aws_region)
             for Model in [
+                self.task_model_step_0_prepare_db_snapshot_manifest,
                 self.task_model_step_1_1_plan_snapshot_to_staging,
                 self.task_model_step_1_2_process_db_snapshot_file_group_manifest_file,
                 self.task_model_step_2_1_plan_staging_to_datalake,

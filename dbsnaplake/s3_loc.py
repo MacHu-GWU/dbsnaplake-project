@@ -38,10 +38,40 @@ if T.TYPE_CHECKING:  # pragma: no cover
 @dataclasses.dataclass
 class S3Location:
     """
-    Example:
+    A central class as a namespace to access all important S3 paths in the ETL
+    pipeline.
 
-        >>> s3uri_staging = "s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/"
-        >>> s3uri_datalake = "s3://bucket/prefix/datalake/mydatabase/mytable/snapshot=2021_01_01_08_30_00/"
+    Example:
+        >>> s3_loc = S3Location(
+        ...     s3uri_staging="s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/"
+        ...     s3uri_datalake="s3://bucket/prefix/datalake/mydatabase/mytable_2021_01_01_08_30_00/"
+        ... )
+        >>> s3_loc.s3dir_staging
+        ...
+        >>> s3_loc.s3dir_datalake
+        ...
+        >>> s3_loc.s3dir_staging_manifest
+        ...
+        >>> s3_loc.s3dir_snapshot_file_group_manifest
+        ...
+        >>> s3_loc.s3dir_snapshot_file_group_manifest_summary
+        ...
+        >>> s3_loc.s3dir_snapshot_file_group_manifest_data
+        ...
+        >>> s3_loc.s3dir_staging_file_group_manifest
+        ...
+        >>> s3_loc.s3dir_staging_file_group_manifest_summary
+        ...
+        >>> s3_loc.s3dir_staging_file_group_manifest_data
+        ...
+        >>> s3_loc.s3dir_partition_file_group_manifest
+        ...
+        >>> s3_loc.s3dir_partition_file_group_manifest_summary
+        ...
+        >>> s3_loc.s3dir_partition_file_group_manifest_data
+        ...
+        >>> s3_loc.s3dir_staging_datalake
+        ...
     """
 
     s3uri_staging: str = dataclasses.field()
@@ -53,10 +83,20 @@ class S3Location:
 
     @property
     def s3dir_staging(self) -> S3Path:
+        """
+        Example::
+
+            s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/
+        """
         return S3Path(self.s3uri_staging).to_dir()
 
     @property
     def s3dir_datalake(self) -> S3Path:
+        """
+        Example::
+
+            s3://bucket/prefix/datalake/mydatabase/mytable_2021_01_01_08_30_00/
+        """
         return S3Path(self.s3uri_datalake).to_dir()
 
     @property
@@ -71,6 +111,9 @@ class S3Location:
     @property
     def s3dir_snapshot_file_group_manifest(self) -> S3Path:
         """
+        Where you store
+        :class:`snapshot file group manifest files <dbsnaplake.snapshot_to_staging.DBSnapshotFileGroupManifestFile>`.
+
         Example::
 
             s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/manifests/snapshot-file-groups/
@@ -100,6 +143,9 @@ class S3Location:
     @property
     def s3dir_staging_file_group_manifest(self) -> S3Path:
         """
+        Where you store
+        :class:`staging file group manifest files <dbsnaplake.snapshot_to_staging.StagingFileGroupManifestFile>`.
+
         Example::
 
             s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/manifests/staging-file-groups/
@@ -129,6 +175,9 @@ class S3Location:
     @property
     def s3dir_partition_file_group_manifest(self) -> S3Path:
         """
+        Where you store
+        :class:`staging file group manifest files <dbsnaplake.staging_to_datalake.PartitionFileGroupManifestFile>`.
+
         Example::
 
             s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/manifests/partition-file-groups/
@@ -159,6 +208,14 @@ class S3Location:
 
     @property
     def s3dir_staging_datalake(self) -> S3Path:
+        """
+        Where you store the staged data that similar to your final
+        datalake folder structure.
+
+        Example::
+
+            s3://bucket/prefix/staging/mydatabase/mytable/snapshot=2021-01-01T08:30:00Z/datalake/
+        """
         return (self.s3dir_staging / DATALAKE_FOLDER).to_dir()
 
     def iter_staging_datalake_partition(
@@ -166,7 +223,9 @@ class S3Location:
         s3_client: "S3Client",
     ) -> T.List[Partition]:  # pragma: no cover
         """
-        List all partitions in the staging datalake folder.
+        List all partitions in the staging datalake folder. So that you can
+        plan how to compact small files in each partition into bigger files
+        and move them to final datalake folder.
         """
         return get_partitions(
             s3_client=s3_client,
@@ -174,13 +233,19 @@ class S3Location:
         )
 
     def get_s3dir_staging_datalake_partition(
-        self, kvs: T.Dict[str, str]
+        self,
+        kvs: T.Dict[str, str],
     ) -> S3Path:  # pragma: no cover
-        """ """
+        """
+        Get the S3 path for a specific partition in the staging datalake folder.
+        """
         return (self.s3dir_staging_datalake / encode_hive_partition(kvs)).to_dir()
 
     def get_s3dir_datalake_partition(
-        self, kvs: T.Dict[str, str]
+        self,
+        kvs: T.Dict[str, str],
     ) -> S3Path:  # pragma: no cover
-        """ """
+        """
+        Get the S3 path for a specific partition in the datalake folder.
+        """
         return (self.s3dir_datalake / encode_hive_partition(kvs)).to_dir()

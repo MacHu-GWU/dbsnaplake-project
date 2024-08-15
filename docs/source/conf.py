@@ -112,6 +112,8 @@ html_theme = "furo"
 
 html_theme_options = {
     "sidebar_hide_name": False,
+    "light_css_variables": {
+    },
 }
 pygments_dark_style = "monokai"
 

@@ -155,7 +155,27 @@ class Test(BaseMockAwsTest):
             self.project.s3_loc.s3dir_staging.delete()
             self.project.s3_loc.s3dir_datalake.delete()
             self.project.task_model_step_1_1_plan_snapshot_to_staging.delete_all()
-            self.project.extract_partition_keys = list()
+            self.project.extract_partition_keys = None
+            self.project.step_1_1_plan_snapshot_to_staging()
+            self.project.step_1_2_process_db_snapshot_file_group_manifest_file()
+            self.project.step_2_1_plan_staging_to_datalake()
+            self.project.step_2_2_process_partition_file_group_manifest_file()
+            self.run_analysis()
+
+        # no derived column no partition
+        with logger.disabled(
+            # disable=True,  # no log
+            disable=False,  # show log
+        ):
+            self.project.extract_record_id = None
+            self.project.extract_create_time = None
+            self.project.extract_update_time = None
+            self.project.extract_partition_keys = None
+            self.project.sort_by = []
+            self.project.descending = []
+            self.project.s3_loc.s3dir_staging.delete()
+            self.project.s3_loc.s3dir_datalake.delete()
+            self.project.task_model_step_1_1_plan_snapshot_to_staging.delete_all()
             self.project.step_1_1_plan_snapshot_to_staging()
             self.project.step_1_2_process_db_snapshot_file_group_manifest_file()
             self.project.step_2_1_plan_staging_to_datalake()

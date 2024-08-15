@@ -20,7 +20,6 @@ Key components:
 """
 
 import typing as T
-import uuid
 import dataclasses
 
 import polars as pl
@@ -46,7 +45,9 @@ if T.TYPE_CHECKING:  # pragma: no cover
 @dataclasses.dataclass
 class DBSnapshotManifestFile(ManifestFile):
     """
-    Represents the full list of data files from the Database snapshot.
+    Represents the full list of data files from the Database snapshot. We will
+    have only one DB snapshot manifest file in the data pipeline. And this is
+    where the data pipeline starts.
 
     This class extends
     `ManifestFile <https://s3manifesto.readthedocs.io/en/latest/s3manifesto/manifest.html#module-s3manifesto.manifest>`_
@@ -67,6 +68,10 @@ class DBSnapshotManifestFile(ManifestFile):
         :param target_size: Target size for each group in bytes. Default is 100 MB.
 
         :return: List of file group manifest files.
+
+        .. seealso::
+
+            :class:`DBSnapshotFileGroupManifestFile`
         """
         db_snapshot_file_group_manifest_file_list = list()
         _lst = db_snapshot_file_group_manifest_file_list  # for shortening the code
@@ -93,11 +98,16 @@ class DBSnapshotManifestFile(ManifestFile):
 @dataclasses.dataclass
 class DBSnapshotFileGroupManifestFile(ManifestFile):
     """
-    Represents a group of snapshot files from the database snapshot.
+    This class is a subgroup of :class:`DBSnapshotManifestFile`, created by
+    breaking down a larger snapshot into more manageable units.
 
     This class extends
     `ManifestFile <https://s3manifesto.readthedocs.io/en/latest/s3manifesto/manifest.html#module-s3manifesto.manifest>`_
     to provide specific functionality for handling groups of snapshot files.
+
+    .. seealso::
+
+        :meth:`DBSnapshotManifestFile.split_into_groups`
     """
 
     @classmethod
@@ -131,7 +141,43 @@ def batch_read_snapshot_data_file(
     db_snapshot_file_group_manifest_file: DBSnapshotFileGroupManifestFile,
     **kwargs,
 ) -> pl.DataFrame:
-    """ """
+    """
+    Loads multiple snapshot data files into an in-memory
+    `Polars DataFrame <https://docs.pola.rs/api/python/stable/reference/dataframe/index.html>`_
+    and applies custom transformations.
+
+    This user-defined function serves as a central point for data processing and
+    transformation in the pipeline. It allows for various operations such as
+    data validation, column manipulation (add/rename/drop), joining with external
+    data sources, data type casting, filtering, and aggregation.
+
+    :param db_snapshot_file_group_manifest_file: :class:`DBSnapshotFileGroupManifestFile`
+        Object containing references to the snapshot data files to be processed.
+
+    :return: A Polars DataFrame containing the processed snapshot data.
+
+    Below is an example to read data from multiple NDJson files and align them:
+
+    >>> import polars as pl
+    >>> def batch_read_snapshot_data_file(
+    ...     db_snapshot_file_group_manifest_file: DBSnapshotFileGroupManifestFile,
+    ...     **kwargs,
+    ... ) -> pl.DataFrame:
+    ...     sub_df_list = list()
+    ...     for data_file in db_snapshot_file_group_manifest_file.data_file_list:
+    ...         sub_df = pl.read_ndjson(data_file["uri"])
+    ...         # arbitrary transofmration logic here
+    ...         sub_df = sub_df.with_columns(pl.col("OrderId").alias("record_id"))
+    ...         sub_df_list.append(sub_df)
+    ...     df = pl.concat(sub_df_list)
+    ...     return df
+
+    .. seealso::
+
+        - `Polars Input/Output Documentation <https://docs.pola.rs/user-guide/io/>`_:
+          For reading data from different file formats and cloud storage.
+        - :func:`process_db_snapshot_file_group_manifest_file`: Related processing function.
+    """
     raise NotImplementedError
 
 
@@ -221,7 +267,29 @@ def add_derived_columns(
 @dataclasses.dataclass
 class StagingFileGroupManifestFile(ManifestFile):
     """
-    Represents a group of staging files.
+    Represents a group of staging files derived from a single
+    :class:`DBSnapshotFileGroupManifestFile`.
+
+    This class manages the output of the partitioning process applied to a
+    :class:`DBSnapshotFileGroupManifestFile`. It stores references to multiple
+    data files, each corresponding to a specific partition.
+
+    Key characteristics:
+
+    1. One-to-one relationship: Each :class:`DBSnapshotFileGroupManifestFile`
+        generates exactly one :class:`StagingFileGroupManifestFile`.
+    2. Partitioning: The original snapshot data is divided into multiple partitions.
+    3. File generation: One data file is created for each partition.
+    4. Storage: This manifest file stores the list of all generated data files.
+
+    The :class:`StagingFileGroupManifestFile` serves as an index or catalog for
+    the partitioned and processed data, facilitating efficient data retrieval and
+    management in subsequent data lake operations.
+
+    .. seealso::
+
+        - :class:`DBSnapshotFileGroupManifestFile`
+        - :func:`process_db_snapshot_file_group_manifest_file`
     """
 
 
@@ -230,10 +298,10 @@ def process_db_snapshot_file_group_manifest_file(
     s3_client: "S3Client",
     s3_loc: S3Location,
     batch_read_snapshot_data_file_func: T_BatchReadSnapshotDataFileCallable,
-    extract_record_id: DerivedColumn,
-    extract_create_time: DerivedColumn,
-    extract_update_time: DerivedColumn,
-    extract_partition_keys: T.List[DerivedColumn],
+    extract_record_id: T.Optional[DerivedColumn] = None,
+    extract_create_time: T.Optional[DerivedColumn] = None,
+    extract_update_time: T.Optional[DerivedColumn] = None,
+    extract_partition_keys: T.Optional[T.List[DerivedColumn]] = None,
     polars_write_parquet_kwargs: T_OPTIONAL_KWARGS = None,
     s3pathlib_write_bytes_kwargs: T_OPTIONAL_KWARGS = None,
     logger=dummy_logger,
@@ -247,15 +315,18 @@ def process_db_snapshot_file_group_manifest_file(
     :param db_snapshot_file_group_manifest_file: Manifest file for the snapshot group.
     :param df: DataFrame containing the snapshot data.
     :param s3_client: Boto3 S3 client.
-    :param extract_record_id: Specification for deriving record ID.
-    :param extract_create_time: Specification for deriving creation time.
-    :param extract_update_time: Specification for deriving update time.
-    :param extract_partition_keys: Specifications for deriving partition keys.
     :param s3_loc: S3 location information.
+    :param batch_read_snapshot_data_file_func:
+    :param extract_record_id: (optional) Specification for deriving record ID.
+    :param extract_create_time: (optional) Specification for deriving creation time.
+    :param extract_update_time: (optional) Specification for deriving update time.
+    :param extract_partition_keys: (optional) Specifications for deriving partition keys.
     :param polars_write_parquet_kwargs: Custom keyword arguments for Polars' write_parquet method.
         Default is ``dict(compression="snappy")``.
     :param s3pathlib_write_bytes_kwargs: Custom keyword arguments for S3Path's write_bytes method.
     :param logger: Logger object for logging operations.
+
+    :return: single :class:`StagingFileGroupManifestFile` object
     """
     # Derive more columns for data lake
     logger.info(
@@ -264,15 +335,25 @@ def process_db_snapshot_file_group_manifest_file(
     df = batch_read_snapshot_data_file_func(
         db_snapshot_file_group_manifest_file=db_snapshot_file_group_manifest_file,
     )
-    df = add_derived_columns(
-        df,
-        [
-            extract_record_id,
-            extract_create_time,
-            extract_update_time,
-            *extract_partition_keys,
-        ],
-    )
+    if extract_partition_keys is None:
+        extract_partition_keys = list()
+    derived_columns = [
+        extract_record_id,
+        extract_create_time,
+        extract_update_time,
+        *extract_partition_keys,
+    ]
+    derived_columns = [col for col in derived_columns if col is not None]
+    if len(derived_columns):
+        df = add_derived_columns(
+            df,
+            [
+                extract_record_id,
+                extract_create_time,
+                extract_update_time,
+                *extract_partition_keys,
+            ],
+        )
     logger.info(f"  Dataframe Shape {df.shape}")
 
     # prepare variables for following operations
