@@ -19,6 +19,7 @@ Key components:
     `s3manifesto <https://s3manifesto.readthedocs.io/en/latest/>`_
 """
 
+from __future__ import annotations
 import typing as T
 import dataclasses
 
