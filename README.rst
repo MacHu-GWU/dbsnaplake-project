@@ -53,7 +53,7 @@ Welcome to ``dbsnaplake`` Documentation
 .. image:: https://dbsnaplake.readthedocs.io/en/latest/_static/dbsnaplake-logo.png
     :target: https://dbsnaplake.readthedocs.io/en/latest/
 
-Documentation for ``dbsnaplake``.
+dbsnaplake (Database Snapshot Data Lake) is a framework that converts any database snapshot into an analytics-friendly data lake.
 
 
 .. _install:
