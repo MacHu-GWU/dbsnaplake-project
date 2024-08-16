@@ -249,3 +249,10 @@ class S3Location:
         Get the S3 path for a specific partition in the datalake folder.
         """
         return (self.s3dir_datalake / encode_hive_partition(kvs)).to_dir()
+
+    @property
+    def s3path_validate_datalake_result(self) -> S3Path:
+        """
+        todo: docstring
+        """
+        return self.s3dir_staging_manifest.joinpath("validate-datalake-result.json")

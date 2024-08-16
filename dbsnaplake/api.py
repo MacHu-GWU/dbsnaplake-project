@@ -46,5 +46,6 @@ from .project import step_1_3_process_db_snapshot_file_group_manifest_file
 from .project import step_2_1_plan_staging_to_datalake
 from .project import step_2_2_get_staging_to_datalake_todo_list
 from .project import step_2_3_process_partition_file_group_manifest_file
+from .project import step_3_1_validate_datalake
 from .project import logger
 from .project import Project

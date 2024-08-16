@@ -62,12 +62,14 @@ def test():
     _ = api.step_2_1_plan_staging_to_datalake
     _ = api.step_2_2_get_staging_to_datalake_todo_list
     _ = api.step_2_3_process_partition_file_group_manifest_file
+    _ = api.step_3_1_validate_datalake
     _ = api.logger
     _ = api.Project
     _ = api.Project.step_1_1_plan_snapshot_to_staging
     _ = api.Project.step_1_2_process_db_snapshot_file_group_manifest_file
     _ = api.Project.step_2_1_plan_staging_to_datalake
     _ = api.Project.step_2_2_process_partition_file_group_manifest_file
+    _ = api.Project.step_3_1_validate_datalake
 
 
 if __name__ == "__main__":

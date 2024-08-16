@@ -69,6 +69,8 @@ from .snapshot_to_staging import T_BatchReadSnapshotDataFileCallable
 from .snapshot_to_staging import process_db_snapshot_file_group_manifest_file
 from .staging_to_datalake import PartitionFileGroupManifestFile
 from .staging_to_datalake import process_partition_file_group_manifest_file
+from .validate_datalake import ValidateDatalakeResult
+from .validate_datalake import validate_datalake
 from .tracker import create_orm_model
 from .tracker import T_TASK
 
@@ -230,6 +232,22 @@ def step_2_3_process_partition_file_group_manifest_file(
     return s3path
 
 
+def step_3_1_validate_datalake(
+    s3_client: "S3Client",
+    s3_loc: S3Location,
+    db_snapshot_manifest_file: DBSnapshotManifestFile,
+    column: T.Optional[str] = None,
+    logger=dummy_logger,
+) -> ValidateDatalakeResult:
+    return validate_datalake(
+        s3_client=s3_client,
+        s3_loc=s3_loc,
+        db_snapshot_manifest_file=db_snapshot_manifest_file,
+        column=column,
+        logger=logger,
+    )
+
+
 logger = VisLog(name="dbsnaplake", log_format="%(message)s")
 
 
@@ -240,6 +258,7 @@ class UseCaseIdSuffixEnum:
     step_1_2_process_db_snapshot_file_group_manifest_file = "step_1_2_process_db_snapshot_file_group_manifest_file"
     step_2_1_plan_staging_to_datalake = "step_2_1_plan_staging_to_datalake"
     step_2_2_process_partition_file_group_manifest_file = "step_2_2_process_partition_file_group_manifest_file"
+    step_3_1_validate_datalake = "step_3_1_validate_datalake"
     # fmt: on
 
 
@@ -289,6 +308,7 @@ class Project:
     sort_by: T.List[str] = dataclasses.field()
     descending: T.List[bool] = dataclasses.field()
     target_parquet_file_size: int = dataclasses.field()
+    count_on_column: T.Optional[str] = dataclasses.field()
     tracker_table_name: str = dataclasses.field()
     aws_region: str = dataclasses.field()
     use_case_id: str = dataclasses.field()
@@ -469,11 +489,14 @@ class Project:
 
         # task = Task.get_one_or_none(task_id=task_id)  # for debug only
         # print(task.attribute_values)  # for debug only
+        return db_snapshot_file_group_manifest_file_list
 
     @logger.start_and_end(
         msg="{func_name}",
     )
-    def step_1_2_process_db_snapshot_file_group_manifest_file(self):
+    def step_1_2_process_db_snapshot_file_group_manifest_file(
+        self,
+    ) -> T.List[StagingFileGroupManifestFile]:
         Task = self.task_model_step_1_2_process_db_snapshot_file_group_manifest_file
         task_list = Task.query_for_unfinished(limit=999, auto_refresh=True)
         new_step_1_3_process_db_snapshot_file_group_manifest_file = (
@@ -481,6 +504,7 @@ class Project:
                 msg="{func_name}",
             )(step_1_3_process_db_snapshot_file_group_manifest_file)
         )
+        staging_file_group_manifest_file_list = list()
         for task in task_list:
             db_snapshot_file_group_manifest_file = DBSnapshotFileGroupManifestFile.read(
                 uri_summary=task.data["uri_summary"],
@@ -501,17 +525,23 @@ class Project:
                             logger=logger,
                         )
                     )
+                    staging_file_group_manifest_file_list.append(
+                        staging_file_group_manifest_file
+                    )
                     uri = staging_file_group_manifest_file.uri_summary
                     exec_ctx.set_data(
                         {"staging_file_group_manifest_file_uri_summary": uri}
                     )
                 # task = Task.get_one_or_none(task_id=task_id)  # for debug only
                 # print(task.attribute_values)  # for debug only
+        return staging_file_group_manifest_file_list
 
     @logger.start_and_end(
         msg="{func_name}",
     )
-    def step_2_1_plan_staging_to_datalake(self):
+    def step_2_1_plan_staging_to_datalake(
+        self,
+    ) -> T.List[PartitionFileGroupManifestFile]:
         Task = self.task_model_step_2_1_plan_staging_to_datalake
         task_id = self.s3_loc.s3dir_staging_file_group_manifest.uri
         task = Task.get_one_or_none(task_id=task_id)
@@ -548,16 +578,18 @@ class Project:
 
         # task = Task.get_one_or_none(task_id=task_id)  # for debug only
         # print(task.attribute_values)  # for debug only
+        return partition_file_group_manifest_file_list
 
     @logger.start_and_end(
         msg="{func_name}",
     )
-    def step_2_2_process_partition_file_group_manifest_file(self):
+    def step_2_2_process_partition_file_group_manifest_file(self) -> T.List[S3Path]:
         Task = self.task_model_step_2_2_process_partition_file_group_manifest_file
         task_list = Task.query_for_unfinished(limit=999, auto_refresh=True)
         new_step_2_3_process_partition_file_group_manifest_file = logger.start_and_end(
             msg="{func_name}",
         )(step_2_3_process_partition_file_group_manifest_file)
+        s3path_list = list()
         for task in task_list:
             partition_file_group_manifest_file = PartitionFileGroupManifestFile.read(
                 uri_summary=task.data["uri_summary"],
@@ -573,6 +605,20 @@ class Project:
                         descending=self.descending,
                         logger=logger,
                     )
+                    s3path_list.append(s3path)
                     exec_ctx.set_data({"parquet_uri": s3path.uri})
                 # task = Task.get_one_or_none(task_id=task_id)  # for debug only
                 # print(task.attribute_values)  # for debug only
+        return s3path_list
+
+    @logger.start_and_end(
+        msg="{func_name}",
+    )
+    def step_3_1_validate_datalake(self) -> ValidateDatalakeResult:
+        return step_3_1_validate_datalake(
+            s3_client=self.s3_client,
+            s3_loc=self.s3_loc,
+            db_snapshot_manifest_file=self.db_snapshot_manifest_file,
+            column=self.count_on_column,
+            logger=logger,
+        )

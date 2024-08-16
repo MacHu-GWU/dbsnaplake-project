@@ -9,6 +9,7 @@ a function to perform the actual validation process.
 """
 
 import typing as T
+import json
 import dataclasses
 
 import polars as pl
@@ -18,6 +19,7 @@ from .s3_loc import S3Location
 from .partition import Partition
 from .partition import extract_partition_data
 from .snapshot_to_staging import DBSnapshotManifestFile
+from .logger import dummy_logger
 
 if T.TYPE_CHECKING:  # pragma: no cover
     from mypy_boto3_s3.client import S3Client
@@ -29,7 +31,7 @@ class Partition:
     n_files: int
     total_size: int
     total_size_4_human: str
-    total_n_record: int
+    total_n_record: T.Optional[int]
 
 
 @dataclasses.dataclass
@@ -59,7 +61,7 @@ class ValidateDatalakeResult:
     after_n_files: int
     after_total_size: int
     after_total_size_4_human: str
-    after_total_n_record: int
+    after_total_n_record: T.Optional[int]
     n_partition: int
     partitions: T.List[Partition]
 
@@ -67,8 +69,9 @@ class ValidateDatalakeResult:
 def validate_datalake(
     s3_client: "S3Client",
     s3_loc: S3Location,
-    column: str,
     db_snapshot_manifest_file: DBSnapshotManifestFile,
+    column: T.Optional[str] = None,
+    logger=dummy_logger,
 ) -> ValidateDatalakeResult:
     """
     Validates the data lake by scanning its contents and collecting statistics.
@@ -78,18 +81,25 @@ def validate_datalake(
 
     :param s3_client: An initialized boto3 S3 client for S3 operations.
     :param s3_loc: S3 location information for the data lake.
-    :param column: Name of the column used to count the number of records. This
-        column has to exist in all rows.
     :param db_snapshot_manifest_file: Manifest file of the original database snapshot.
+    :param column: Name of the column used to count the number of records. This
+        column has to exist in all rows. If not provided, then it will not include
+        the record count in the validation result.
 
     .. note::
 
         We don't use previous manifest data to validate the datalake. We only use
         the current snapshot data to validate the datalake.
+
+    .. note::
+
+        The count n record feature is not available in unit test, because
+        the polars.scan_parquet method is not working well with moto (mock).
     """
     s3dir_root = s3_loc.s3dir_datalake
+    logger.info(f"Validate datalake at: {s3dir_root.uri}")
+    logger.info(f"Scan all files ...")
     s3path_list = s3dir_root.iter_objects(bsm=s3_client).all()
-
     s3dir_uri_list = list()
     partition_to_file_list_mapping: T.Dict[str, T.List[S3Path]] = dict()
     len_s3dir_root = len(s3dir_root.uri)
@@ -107,20 +117,25 @@ def validate_datalake(
             except KeyError:
                 partition_to_file_list_mapping[s3dir_uri] = [s3path]
 
+    logger.info(f"  Got {len(partition_to_file_list_mapping)} partitions.")
+    logger.info(f"Collect per partition information ...")
     after_total_n_record = 0
     partitions = list()
     for s3dir_uri, s3path_list in partition_to_file_list_mapping.items():
         s3dir = S3Path.from_s3_uri(s3dir_uri)
         partition_data = extract_partition_data(s3dir_root, s3dir)
-        n_record = (
-            pl.scan_parquet(
-                [s3path.uri for s3path in s3path_list],
+        if column is not None:
+            n_record = (
+                pl.scan_parquet(
+                    [s3path.uri for s3path in s3path_list],
+                )
+                .select(pl.col(column))
+                .count()
+                .collect()[column][0]
             )
-            .select(pl.col(column))
-            .count()
-            .collect()[column][0]
-        )
-        after_total_n_record += n_record
+            after_total_n_record += n_record
+        else:
+            n_record = None
         total_size = sum(s3path.size for s3path in s3path_list)
         partition = Partition(
             data=partition_data,
@@ -129,9 +144,17 @@ def validate_datalake(
             total_size_4_human=repr_data_size(total_size),
             total_n_record=n_record,
         )
+        logger.info(f"Statistics infor for partition {partition_data}:")
+        logger.info(f"  n_files = {partition.n_files}")
+        logger.info(f"  total_size = {partition.total_size}")
+        logger.info(f"  total_size_4_human = {partition.total_size_4_human}")
+        logger.info(f"  total_n_record = {partition.total_n_record}")
         partitions.append(partition)
 
-    validate_datalake_result = ValidateDatalakeResult(
+    if column is None:
+        after_total_n_record = None
+
+    result = ValidateDatalakeResult(
         before_n_files=len(db_snapshot_manifest_file.data_file_list),
         before_total_size=db_snapshot_manifest_file.size,
         before_total_size_4_human=repr_data_size(db_snapshot_manifest_file.size),
@@ -143,5 +166,23 @@ def validate_datalake(
         n_partition=len(partitions),
         partitions=partitions,
     )
+    logger.info(f"Statistics infor for datalake {s3dir_root.uri}:")
+    logger.info(f"{result.before_n_files = }")
+    logger.info(f"{result.before_total_size = }")
+    logger.info(f"{result.before_total_size_4_human = }")
+    logger.info(f"{result.before_total_n_record = }")
+    logger.info(f"{result.after_n_files = }")
+    logger.info(f"{result.after_total_size = }")
+    logger.info(f"{result.after_total_size_4_human = }")
+    logger.info(f"{result.after_total_n_record = }")
+    logger.info(f"{result.n_partition = }")
 
-    return validate_datalake_result
+    s3path = s3_loc.s3path_validate_datalake_result
+    result_data = dataclasses.asdict(result)
+    content = json.dumps(result_data, indent=4)
+    s3path.write_text(
+        content,
+        content_type="application/json",
+        bsm=s3_client,
+    )
+    return result

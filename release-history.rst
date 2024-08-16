@@ -15,6 +15,17 @@ x.y.z (Backlog)
 **Miscellaneous**
 
 
+0.2.1 (2024-08-16)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+**Minor Improvements**
+
+- Now the ``column`` parameter is optional in ``dbsnaplake.api.validate_datalake``.
+- Add the following public APIs:
+    - ``dbsnaplake.api.S3Location.s3path_validate_datalake_result``
+    - ``dbsnaplake.api.step_3_1_validate_datalake``
+    - ``dbsnaplake.api.Project.step_3_1_validate_datalake``
+
+
 0.1.2 (2024-08-16)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 **Features and Improvements**

@@ -103,12 +103,16 @@ class Test(BaseMockAwsTest):
             sort_by=["update_time"],
             descending=[True],
             target_parquet_file_size=target_parquet_file_size,
+            count_on_column=None,
             tracker_table_name="dbsnaplake-tracker",
             aws_region="us-east-1",
             use_case_id="test",
         )
         cls.project.connect_dynamodb(bsm=cls.bsm)
 
+    @logger.start_and_end(
+        msg="{func_name}",
+    )
     def run_analysis(self):
         s3path_list = self.project.s3_loc.s3dir_datalake.iter_objects(
             bsm=self.s3_client
@@ -145,6 +149,11 @@ class Test(BaseMockAwsTest):
             # disable=True,  # no log
             disable=False,  # show log
         ):
+            self.project.step_3_1_validate_datalake()
+        with logger.disabled(
+            # disable=True,  # no log
+            disable=False,  # show log
+        ):
             self.run_analysis()
 
         # no partition
@@ -160,6 +169,7 @@ class Test(BaseMockAwsTest):
             self.project.step_1_2_process_db_snapshot_file_group_manifest_file()
             self.project.step_2_1_plan_staging_to_datalake()
             self.project.step_2_2_process_partition_file_group_manifest_file()
+            self.project.step_3_1_validate_datalake()
             self.run_analysis()
 
         # no derived column no partition
@@ -180,6 +190,7 @@ class Test(BaseMockAwsTest):
             self.project.step_1_2_process_db_snapshot_file_group_manifest_file()
             self.project.step_2_1_plan_staging_to_datalake()
             self.project.step_2_2_process_partition_file_group_manifest_file()
+            self.project.step_3_1_validate_datalake()
             self.run_analysis()
 
     def test(self):
