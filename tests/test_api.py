@@ -52,6 +52,8 @@ def test():
     _ = api.PartitionFileGroupManifestFile.plan_partition_compaction
     _ = api.PartitionFileGroupManifestFile.read_all_groups
     _ = api.process_partition_file_group_manifest_file
+    _ = api.ValidateDatalakeResult
+    _ = api.validate_datalake
     _ = api.T_TASK
     _ = api.create_orm_model
     _ = api.step_1_1_plan_snapshot_to_staging

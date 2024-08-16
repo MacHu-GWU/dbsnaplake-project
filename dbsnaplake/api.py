@@ -36,6 +36,8 @@ from .snapshot_to_staging import process_db_snapshot_file_group_manifest_file
 from .staging_to_datalake import extract_s3_directory
 from .staging_to_datalake import PartitionFileGroupManifestFile
 from .staging_to_datalake import process_partition_file_group_manifest_file
+from .validate_datalake import ValidateDatalakeResult
+from .validate_datalake import validate_datalake
 from .tracker import T_TASK
 from .tracker import create_orm_model
 from .project import step_1_1_plan_snapshot_to_staging

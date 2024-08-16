@@ -243,39 +243,38 @@ class UseCaseIdSuffixEnum:
     # fmt: on
 
 
-# class TaskIdEnum:
-#     step_1_1_plan_snapshot_to_staging_tpl = (
-#         "step_1_1_plan_snapshot_to_staging_{uri_summary}"
-#     )
-#     step_1_2_process_db_snapshot_file_group_manifest_file_tpl = (
-#         "step_1_2_process_db_snapshot_file_group_manifest_file_{uri_summary}"
-#     )
-#     step_2_1_plan_staging_to_datalaketask_id = (
-#         "step_2_1_plan_staging_to_datalake_{uri_summary}"
-#     )
-#     step_2_2_process_partition_file_group_manifest_file_tpl = (
-#         "step_2_2_process_partition_file_group_manifest_file_{uri_summary}"
-#     )
-
-
 @dataclasses.dataclass
 class Project:
     """
-    :param s3_client:
-    :param s3uri_db_snapshot_manifest_summary:
-    :param s3uri_staging:
-    :param s3uri_datalake:
-    :param target_db_snapshot_file_group_size:
-    :param extract_record_id:
-    :param extract_create_time:
-    :param extract_update_time:
-    :param extract_partition_keys:
-    :param sort_by:
-    :param descending:
-    :param target_parquet_file_size:
-    :param tracker_table_name:
-    :param aws_region:
-    :param use_case_id:
+    Manages the workflow for converting database snapshots to a data lake format.
+
+    This class encapsulates the entire process of exporting database snapshots,
+    transforming them, and ingesting them into a data lake. It provides methods
+    for each step of the workflow and manages the state using DynamoDB tables.
+
+    :param s3_client: Initialized boto3 S3 client for S3 operations.
+    :param s3uri_db_snapshot_manifest_summary: S3 URI of the DB snapshot manifest summary.
+    :param s3uri_staging: S3 URI for storing intermediate staging data.
+    :param s3uri_datalake: S3 URI for the final data lake storage.
+    :param target_db_snapshot_file_group_size: Target size for DB snapshot file groups.
+    :param extract_record_id: Logic for extracting record IDs.
+    :param extract_create_time: Logic for extracting creation timestamps.
+    :param extract_update_time: Logic for extracting update timestamps.
+    :param extract_partition_keys[DerivedColumn]): Logic for extracting partition keys.
+    :param sort_by: Column names to sort by before writing to parquet.
+    :param descending: Corresponding sort orders (True for descending).
+    :param target_parquet_file_size: Target size for output parquet files.
+    :param tracker_table_name: Name of the DynamoDB table for tracking tasks.
+    :param aws_region: AWS region for the DynamoDB tracker table.
+    :param use_case_id: Unique identifier for this specific use case.
+
+    **Methods**
+
+    - :meth:`connect_dynamodb`: Initializes connections to DynamoDB tables for task tracking.
+    - :meth:`step_1_1_plan_snapshot_to_staging`: Plans the division of DB snapshot files.
+    - :meth:`step_1_2_process_db_snapshot_file_group_manifest_file`: Processes snapshot groups.
+    - :meth:`step_2_1_plan_staging_to_datalake`: Plans the merging of staging files.
+    - :meth:`step_2_2_process_partition_file_group_manifest_file`: Executes file compaction.
     """
 
     s3_client: "S3Client" = dataclasses.field()
@@ -296,6 +295,9 @@ class Project:
 
     @cached_property
     def s3_loc(self) -> S3Location:
+        """
+        Access the :class:`~dbsnaplake.s3_loc.S3Location` object for this project.
+        """
         return S3Location(
             s3uri_staging=self.s3uri_staging,
             s3uri_datalake=self.s3uri_datalake,
@@ -303,6 +305,10 @@ class Project:
 
     @cached_property
     def db_snapshot_manifest_file(self) -> DBSnapshotManifestFile:
+        """
+        Access the :class:`~dbsnaplake.snapshot_to_staging.DBSnapshotManifestFile`
+        object for this project.
+        """
         return DBSnapshotManifestFile.read(
             uri_summary=self.s3uri_db_snapshot_manifest_summary,
             s3_client=self.s3_client,
@@ -313,10 +319,23 @@ class Project:
         db_snapshot_file_group_manifest_file: DBSnapshotFileGroupManifestFile,
         **kwargs,
     ) -> pl.DataFrame:
+        """
+        You have to override this method and implement the logic to read the
+        snapshot data file into a Polars DataFrame.
+        """
         raise NotImplementedError
 
     @cached_property
     def task_model_step_0_prepare_db_snapshot_manifest(self) -> T.Type[T_TASK]:
+        """
+        Access the DynamoDB Status Tracking ORM model for step_0.
+
+        .. note::
+
+            This property is created only once and has to be cached.
+
+
+        """
         return create_orm_model(
             tracker_table_name=self.tracker_table_name,
             aws_region=self.aws_region,
@@ -325,6 +344,13 @@ class Project:
 
     @cached_property
     def task_model_step_1_1_plan_snapshot_to_staging(self) -> T.Type[T_TASK]:
+        """
+        Access the DynamoDB Status Tracking ORM model for step_1_1.
+
+        .. note::
+
+            This property is created only once and has to be cached.
+        """
         return create_orm_model(
             tracker_table_name=self.tracker_table_name,
             aws_region=self.aws_region,
@@ -335,6 +361,13 @@ class Project:
     def task_model_step_1_2_process_db_snapshot_file_group_manifest_file(
         self,
     ) -> T.Type[T_TASK]:
+        """
+        Access the DynamoDB Status Tracking ORM model for step_1_2.
+
+        .. note::
+
+            This property is created only once and has to be cached.
+        """
         return create_orm_model(
             tracker_table_name=self.tracker_table_name,
             aws_region=self.aws_region,
@@ -343,6 +376,13 @@ class Project:
 
     @cached_property
     def task_model_step_2_1_plan_staging_to_datalake(self) -> T.Type[T_TASK]:
+        """
+        Access the DynamoDB Status Tracking ORM model for step_2_1.
+
+        .. note::
+
+            This property is created only once and has to be cached.
+        """
         return create_orm_model(
             tracker_table_name=self.tracker_table_name,
             aws_region=self.aws_region,
@@ -353,6 +393,13 @@ class Project:
     def task_model_step_2_2_process_partition_file_group_manifest_file(
         self,
     ) -> T.Type[T_TASK]:
+        """
+        Access the DynamoDB Status Tracking ORM model for step_2_2.
+
+        .. note::
+
+            This property is created only once and has to be cached.
+        """
         return create_orm_model(
             tracker_table_name=self.tracker_table_name,
             aws_region=self.aws_region,
@@ -360,6 +407,9 @@ class Project:
         )
 
     def connect_dynamodb(self, bsm: "BotoSesManager"):
+        """
+        Configure the DynamoDB ORM python library to use the right AWS credential.
+        """
         with bsm.awscli():
             conn = Connection(region=bsm.aws_region)
             for Model in [
