@@ -178,6 +178,8 @@ def validate_datalake(
     logger.info(f"{result.n_partition = }")
 
     s3path = s3_loc.s3path_validate_datalake_result
+    logger.info(f"Write datalake statistics to {s3path.uri = }")
+    logger.info(f"  Preview at: {s3path.console_url}")
     result_data = dataclasses.asdict(result)
     content = json.dumps(result_data, indent=4)
     s3path.write_text(
