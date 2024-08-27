@@ -4,10 +4,11 @@ import random
 
 import polars as pl
 from s3pathlib import S3Path
+from polars_writer.api import Writer
 
 from dbsnaplake.polars_utils import (
+    write_to_s3,
     write_parquet_to_s3,
-    write_data_file,
     read_parquet_from_s3,
     read_many_parquet_from_s3,
     group_by_partition,
@@ -17,6 +18,25 @@ from dbsnaplake.tests.mock_aws import BaseMockAwsTest
 
 class Test(BaseMockAwsTest):
     use_mock: bool = True
+
+    def test_write_to_s3(self):
+        df = pl.DataFrame({"id": [1, 2, 3], "name": ["alice", "bob", "cathy"]})
+        s3path = S3Path(f"s3://{self.bucket}/1.csv")
+        write_to_s3(
+            df=df,
+            s3path=s3path,
+            s3_client=self.s3_client,
+            polars_writer=Writer(
+                format="ndjson",
+            ),
+            s3pathlib_write_bytes_kwargs={"content_type": "application/json"},
+        )
+        text = s3path.read_text(bsm=self.s3_client)
+        assert text.splitlines() == [
+            '{"id":1,"name":"alice"}',
+            '{"id":2,"name":"bob"}',
+            '{"id":3,"name":"cathy"}',
+        ]
 
     def test_write_parquet_to_s3(self):
         df = pl.DataFrame({"id": [1, 2, 3], "name": ["alice", "bob", "cathy"]})
