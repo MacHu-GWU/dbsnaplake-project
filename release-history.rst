@@ -15,6 +15,27 @@ x.y.z (Backlog)
 **Miscellaneous**
 
 
+0.3.1 (2024-08-27)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+**💥Breaking Changes**
+
+- Removed the following public APIs. We no longer uses parameter to custom the ``batch_read_snapshot_data_file_func`` logic, all the data transformation logic should be implemented in the ``batch_read_snapshot_data_file_func`` function.
+    - ``dbsnaplake.api.T_EXTRACTOR``
+    - ``dbsnaplake.api.DerivedColumn``
+- Removed the following writer. We start using `polars_writer <https://github.com/MacHu-GWU/polars_writer-project>`_ to write parquet files.
+    - ``dbsnaplake.api.write_parquet_to_s3``
+    - ``dbsnaplake.api.write_data_file``
+- Add ``polars_writer`` parameter to the following API:
+    - ``dbsnaplake.api.step_2_3_process_partition_file_group_manifest_file``
+    - ``dbsnaplake.api.Project``
+
+**Features and Improvements**
+
+- No longer force to use parquet as the datalake format. Now you can use any format that supported by ``polars``.
+- Add the following public APIs:
+    - ``dbsnaplake.api.constants.S3_METADATA_KEY_N_RECORD``
+
+
 0.2.1 (2024-08-16)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 **Minor Improvements**
