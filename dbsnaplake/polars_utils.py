@@ -6,6 +6,7 @@ Polars utilities.
 
 import typing as T
 import io
+import gzip
 
 import polars as pl
 from s3pathlib import S3Path
@@ -18,96 +19,168 @@ if T.TYPE_CHECKING:  # pragma: no cover
     from mypy_boto3_s3.client import S3Client
 
 
+def configure_s3_write_options(
+    df: pl.DataFrame,
+    polars_writer: Writer,
+    gzip_compress: bool,
+    s3pathlib_write_bytes_kwargs: T.Dict[str, T.Any],
+) -> str:
+    """
+    Configure S3 write options based on the polars writer.
+
+    This function sets up the necessary metadata and content-related parameters for
+    writing a Polars DataFrame to S3. It determines the appropriate file extension
+    and configures compression settings based on the writer format and user preferences.
+
+    :param df: The Polars DataFrame to be written.
+    :param polars_writer: The Polars writer object specifying the output format.
+    :param gzip_compress: Whether to apply gzip compression (where applicable).
+    :param s3pathlib_write_bytes_kwargs: Dictionary of keyword arguments
+        for S3 write operation, to be modified in-place.
+
+    :return: The appropriate file extension for the configured write operation.
+    """
+    more_metadata = {
+        S3_METADATA_KEY_N_RECORD: str(df.shape[0]),
+        S3_METADATA_KEY_N_COLUMN: str(df.shape[1]),
+    }
+    if "metadata" in s3pathlib_write_bytes_kwargs:
+        s3pathlib_write_bytes_kwargs["metadata"].update(more_metadata)
+    else:
+        s3pathlib_write_bytes_kwargs["metadata"] = more_metadata
+
+    if polars_writer.is_csv():
+        s3pathlib_write_bytes_kwargs["content_type"] = "text/plain"
+        if gzip_compress:
+            s3pathlib_write_bytes_kwargs["content_encoding"] = "gzip"
+            return ".csv.gzip"
+        else:
+            return ".csv"
+    elif polars_writer.is_json() or polars_writer.is_ndjson():
+        s3pathlib_write_bytes_kwargs["content_type"] = "application/json"
+        if gzip_compress:
+            s3pathlib_write_bytes_kwargs["content_encoding"] = "gzip"
+            return ".json.gzip"
+        else:
+            return ".json"
+    elif polars_writer.is_parquet():
+        s3pathlib_write_bytes_kwargs["content_type"] = "application/x-parquet"
+        if isinstance(polars_writer.parquet_compression, str):
+            if gzip_compress is True:
+                raise ValueError(
+                    "For Parquet, gzip_compress must be False. "
+                    "You should use Writer.parquet_compression to specify the compression."
+                )
+            s3pathlib_write_bytes_kwargs["content_encoding"] = (
+                polars_writer.parquet_compression
+            )
+            return f".{polars_writer.parquet_compression}.parquet"
+        else:
+            # use snappy as the default compression
+            polars_writer.parquet_compression = "snappy"
+            if gzip_compress is True:
+                polars_writer.parquet_compression = "gzip"
+                s3pathlib_write_bytes_kwargs["content_encoding"] = "gzip"
+                return ".gzip.parquet"
+            else:
+                s3pathlib_write_bytes_kwargs["content_encoding"] = "snappy"
+                return ".snappy.parquet"
+    elif polars_writer.is_delta():  # pragma: no cover
+        raise NotImplementedError
+    else:  # pragma: no cover
+        raise ValueError(f"Unsupported format: {polars_writer.format}")
+
+
+def configure_s3path(
+    s3dir: T.Optional[S3Path] = None,
+    fname: T.Optional[str] = None,
+    ext: T.Optional[str] = None,
+    s3path: T.Optional[S3Path] = None,
+):
+    """
+    Configure and return an S3Path object for file operations.
+
+    This function allows flexible specification of an S3 path. It can either construct
+    a path from individual components (directory, filename, and extension) or use a
+    pre-configured S3Path object.
+
+    :param s3dir: The S3 directory path. Required if s3path is not provided.
+    :param fname: The filename without extension. Required if s3path is not provided.
+        for example, if the full file name is "data.csv", then fname is "data".
+    :param ext: The file extension, including the dot (e.g., '.csv').
+        Required if s3path is not provided.
+    :param s3path: A pre-configured S3Path object. If provided, other arguments are ignored.
+
+    :return The configured S3Path object representing the full file path in S3.
+    """
+    if s3path is None:
+        if (s3dir is None) or (fname is None) or (ext is None):
+            raise ValueError(
+                "s3dir, fname, and ext must be provided when s3path is not provided"
+            )
+        return s3dir.joinpath(fname + ext)
+    else:
+        return s3path
+
+
 def write_to_s3(
     df: pl.DataFrame,
-    s3path: S3Path,
     s3_client: "S3Client",
     polars_writer: Writer,
+    gzip_compress: bool = False,
     s3pathlib_write_bytes_kwargs: T_OPTIONAL_KWARGS = None,
-) -> T.Tuple[int, str]:
+    s3dir: T.Optional[S3Path] = None,
+    fname: T.Optional[str] = None,
+    s3path: T.Optional[S3Path] = None,
+) -> T.Tuple[S3Path, int, str]:
     """
     Write the DataFrame to the given S3Path object, also attach
     additional information related to the dataframe.
 
+    The original ``polars.write_parquet`` method doesn't work with moto,
+    so we use buffer to store the parquet file and then write it to S3.
+
     :param df: ``polars.DataFrame`` object.
-    :param s3path: ``s3pathlib.S3Path`` object.
     :param s3_client: ``boto3.client("s3")`` object.
     :param polars_writer: `polars_writer.api.Writer <https://github.com/MacHu-GWU/polars_writer-project>`_
         object.
+    :param gzip_compress: Flag to enable GZIP compression.
     :param s3pathlib_write_bytes_kwargs: Keyword arguments for
         ``s3path.write_bytes`` method. See
         https://s3pathlib.readthedocs.io/en/latest/s3pathlib/core/rw.html#s3pathlib.core.rw.ReadAndWriteAPIMixin.write_bytes
+    :param s3dir: The S3 directory path. Required if s3path is not provided.
+    :param fname: The filename without extension. Required if s3path is not provided.
+        for example, if the full file name is "data.csv", then fname is "data".
+    :param s3path: A pre-configured S3Path object. If provided, other arguments are ignored.
 
-    :return: A tuple of two values:
+    :return: A tuple of three values:
+        - The S3Path object representing the full file path in S3.
         - The number of bytes written to S3, i.e., the size of the parquet file.
         - The ETag of the S3 object.
     """
     if s3pathlib_write_bytes_kwargs is None:
         s3pathlib_write_bytes_kwargs = {}
-    more_metadata = {
-        S3_METADATA_KEY_N_RECORD: str(df.shape[0]),
-        S3_METADATA_KEY_N_COLUMN: str(df.shape[1]),
-    }
-    if "metadata" in s3pathlib_write_bytes_kwargs:
-        s3pathlib_write_bytes_kwargs["metadata"].update(more_metadata)
-    else:
-        s3pathlib_write_bytes_kwargs["metadata"] = more_metadata
     buffer = io.BytesIO()
     polars_writer.write(df, file_args=[buffer])
     b = buffer.getvalue()
+    if (polars_writer.is_parquet() is False) and gzip_compress:
+        b = gzip.compress(b)
+    ext = configure_s3_write_options(
+        df=df,
+        polars_writer=polars_writer,
+        gzip_compress=gzip_compress,
+        s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
+    )
+    s3path = configure_s3path(
+        s3dir=s3dir,
+        fname=fname,
+        ext=ext,
+        s3path=s3path,
+    )
     s3path_new = s3path.write_bytes(b, bsm=s3_client, **s3pathlib_write_bytes_kwargs)
     size = len(b)
     etag = s3path_new.etag
-    return (size, etag)
-
-
-def write_parquet_to_s3(
-    df: pl.DataFrame,
-    s3path: S3Path,
-    s3_client: "S3Client",
-    polars_write_parquet_kwargs: T.Optional[T.Dict[str, T.Any]] = None,
-    s3pathlib_write_bytes_kwargs: T.Optional[T.Dict[str, T.Any]] = None,
-) -> T.Tuple[int, str]:
-    """
-    Write polars dataframe to AWS S3 as a parquet file.
-
-    The original ``polars.write_parquet`` method doesn't work with moto.
-
-    :param df: ``polars.DataFrame`` object.
-    :param s3path: ``s3pathlib.S3Path`` object.
-    :param s3_client: ``boto3.client("s3")`` object.
-    :param polars_write_parquet_kwargs: Keyword arguments for
-        ``polars.DataFrame.write_parquet`` method. See
-        https://docs.pola.rs/api/python/stable/reference/api/polars.DataFrame.write_parquet.html
-    :param s3pathlib_write_bytes_kwargs: Keyword arguments for
-        ``s3path.write_bytes`` method. See
-        https://s3pathlib.readthedocs.io/en/latest/s3pathlib/core/rw.html#s3pathlib.core.rw.ReadAndWriteAPIMixin.write_bytes
-
-    :return: A tuple of three values:
-        - The number of bytes written to S3, i.e., the size of the parquet file.
-        - The ETag of the S3 object.
-    """
-    if polars_write_parquet_kwargs is None:
-        polars_write_parquet_kwargs = {}
-    if s3pathlib_write_bytes_kwargs is None:
-        s3pathlib_write_bytes_kwargs = {}
-    more_metadata = {
-        S3_METADATA_KEY_N_RECORD: str(df.shape[0]),
-        S3_METADATA_KEY_N_COLUMN: str(df.shape[1]),
-    }
-    if "metadata" in s3pathlib_write_bytes_kwargs:
-        s3pathlib_write_bytes_kwargs["metadata"].update(more_metadata)
-    else:
-        s3pathlib_write_bytes_kwargs["metadata"] = more_metadata
-    s3pathlib_write_bytes_kwargs["content_type"] = "application/x-parquet"
-
-    buffer = io.BytesIO()
-    df.write_parquet(buffer, **polars_write_parquet_kwargs)
-    b = buffer.getvalue()
-    s3path_new = s3path.write_bytes(b, bsm=s3_client, **s3pathlib_write_bytes_kwargs)
-    size = len(b)
-    etag = s3path_new.etag
-    return (size, etag)
+    return (s3path_new, size, etag)
 
 
 def read_parquet_from_s3(

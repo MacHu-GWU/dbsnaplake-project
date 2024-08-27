@@ -1,17 +1,19 @@
 # -*- coding: utf-8 -*-
 
+import io
 import dataclasses
 
 import polars as pl
 from s3pathlib import S3Path
-from pynamodb_mate.api import Connection
 from s3manifesto.api import KeyEnum
+from polars_writer.api import Writer
 
 from dbsnaplake._import_utils import read_many_parquet_from_s3
 from dbsnaplake._import_utils import DBSnapshotFileGroupManifestFile
-from dbsnaplake._import_utils import DerivedColumn
 from dbsnaplake._import_utils import logger
 from dbsnaplake._import_utils import Project
+from dbsnaplake._import_utils import step_1_2_get_snapshot_to_staging_todo_list
+from dbsnaplake._import_utils import step_2_2_get_staging_to_datalake_todo_list
 from dbsnaplake.tests.mock_aws import BaseMockAwsTest
 from dbsnaplake.tests.data_faker import generate_db_snapshot_file_data
 
@@ -30,6 +32,10 @@ class MyProject(Project):
         df = read_many_parquet_from_s3(
             s3path_list=s3path_list,
             s3_client=self.s3_client,
+        )
+        df = df.with_columns(
+            year=pl.col("order_time").dt.year().cast(pl.Utf8),
+            month=pl.col("order_time").dt.month().cast(pl.Utf8).str.zfill(2),
         )
         return df
 
@@ -75,35 +81,13 @@ class Test(BaseMockAwsTest):
             s3uri_staging=s3dir_bucket.joinpath("staging").to_dir().uri,
             s3uri_datalake=s3dir_bucket.joinpath("datalake").to_dir().uri,
             target_db_snapshot_file_group_size=target_db_snapshot_file_group_size,
-            extract_record_id=DerivedColumn(
-                extractor="order_id",
-                alias="record_id",
-            ),
-            extract_create_time=DerivedColumn(
-                extractor=pl.col("order_time"),
-                alias="create_time",
-            ),
-            extract_update_time=DerivedColumn(
-                extractor=pl.col("create_time"),
-                alias="update_time",
-            ),
-            extract_partition_keys=[
-                DerivedColumn(
-                    extractor=pl.col("create_time").dt.year(),
-                    alias="year",
-                ),
-                DerivedColumn(
-                    extractor=pl.col("create_time")
-                    .dt.month()
-                    .cast(pl.Utf8)
-                    .str.zfill(2),
-                    alias="month",
-                ),
-            ],
-            sort_by=["update_time"],
+            partition_keys=["year", "month"],
+            sort_by=["order_time"],
             descending=[True],
             target_parquet_file_size=target_parquet_file_size,
-            count_on_column=None,
+            polars_writer=None,
+            gzip_compression=False,
+            count_column=None,
             tracker_table_name="dbsnaplake-tracker",
             aws_region="us-east-1",
             use_case_id="test",
@@ -113,7 +97,7 @@ class Test(BaseMockAwsTest):
     @logger.start_and_end(
         msg="{func_name}",
     )
-    def run_analysis(self):
+    def run_analysis_on_parquet(self):
         s3path_list = self.project.s3_loc.s3dir_datalake.iter_objects(
             bsm=self.s3_client
         ).all()
@@ -124,12 +108,33 @@ class Test(BaseMockAwsTest):
         assert df.shape[0] == self.n_db_snapshot_record
         logger.info(str(df))
 
+    @logger.start_and_end(
+        msg="{func_name}",
+    )
+    def run_analysis_on_csv(self):
+        s3path_list = self.project.s3_loc.s3dir_datalake.iter_objects(
+            bsm=self.s3_client
+        ).all()
+        sub_df_list = list()
+        for s3path in s3path_list:
+            b = s3path.read_bytes(bsm=self.s3_client)
+            sub_df = pl.read_csv(io.BytesIO(b))
+            sub_df_list.append(sub_df)
+        df = pl.concat(sub_df_list)
+        assert df.shape[0] == self.n_db_snapshot_record
+        logger.info(str(df))
+
     def _test(self):
+        # has 12 partitions
         with logger.disabled(
             # disable=True,  # no log
             disable=False,  # show log
         ):
             self.project.step_1_1_plan_snapshot_to_staging()
+        db_snapshot_file_group_manifest_file_list = step_1_2_get_snapshot_to_staging_todo_list(
+            s3_client=self.s3_client,
+            s3_loc=self.project.s3_loc,
+        )
         with logger.disabled(
             # disable=True,  # no log
             disable=False,  # show log
@@ -140,6 +145,10 @@ class Test(BaseMockAwsTest):
             disable=False,  # show log
         ):
             self.project.step_2_1_plan_staging_to_datalake()
+        partition_file_group_manifest_file_list = step_2_2_get_staging_to_datalake_todo_list(
+            s3_client=self.s3_client,
+            s3_loc=self.project.s3_loc,
+        )
         with logger.disabled(
             # disable=True,  # no log
             disable=False,  # show log
@@ -154,7 +163,7 @@ class Test(BaseMockAwsTest):
             # disable=True,  # no log
             disable=False,  # show log
         ):
-            self.run_analysis()
+            self.run_analysis_on_parquet()
 
         # no partition
         with logger.disabled(
@@ -164,34 +173,14 @@ class Test(BaseMockAwsTest):
             self.project.s3_loc.s3dir_staging.delete()
             self.project.s3_loc.s3dir_datalake.delete()
             self.project.task_model_step_1_1_plan_snapshot_to_staging.delete_all()
-            self.project.extract_partition_keys = None
+            self.project.partition_keys = []
+            self.project.polars_writer = Writer(format="csv")
             self.project.step_1_1_plan_snapshot_to_staging()
             self.project.step_1_2_process_db_snapshot_file_group_manifest_file()
             self.project.step_2_1_plan_staging_to_datalake()
             self.project.step_2_2_process_partition_file_group_manifest_file()
             self.project.step_3_1_validate_datalake()
-            self.run_analysis()
-
-        # no derived column no partition
-        with logger.disabled(
-            # disable=True,  # no log
-            disable=False,  # show log
-        ):
-            self.project.extract_record_id = None
-            self.project.extract_create_time = None
-            self.project.extract_update_time = None
-            self.project.extract_partition_keys = None
-            self.project.sort_by = []
-            self.project.descending = []
-            self.project.s3_loc.s3dir_staging.delete()
-            self.project.s3_loc.s3dir_datalake.delete()
-            self.project.task_model_step_1_1_plan_snapshot_to_staging.delete_all()
-            self.project.step_1_1_plan_snapshot_to_staging()
-            self.project.step_1_2_process_db_snapshot_file_group_manifest_file()
-            self.project.step_2_1_plan_staging_to_datalake()
-            self.project.step_2_2_process_partition_file_group_manifest_file()
-            self.project.step_3_1_validate_datalake()
-            self.run_analysis()
+            self.run_analysis_on_csv()
 
     def test(self):
         with logger.disabled(

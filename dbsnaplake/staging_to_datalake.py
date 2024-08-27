@@ -11,12 +11,15 @@ import dataclasses
 import polars as pl
 from s3pathlib import S3Path
 from s3manifesto.api import KeyEnum, ManifestFile
+from polars_writer.api import Writer
 
 from .typehint import T_OPTIONAL_KWARGS
 from .s3_loc import S3Location
-from .polars_utils import write_data_file
-from .polars_utils import read_parquet_from_s3
-from .polars_utils import read_many_parquet_from_s3
+from .polars_utils import (
+    write_to_s3,
+    read_parquet_from_s3,
+    read_many_parquet_from_s3,
+)
 from .logger import dummy_logger
 
 if T.TYPE_CHECKING:  # pragma: no cover
@@ -177,9 +180,10 @@ def process_partition_file_group_manifest_file(
     partition_file_group_manifest_file: PartitionFileGroupManifestFile,
     s3_client: "S3Client",
     s3_loc: S3Location,
+    polars_writer: T.Optional[Writer] = None,
+    gzip_compress: bool = False,
     sort_by: T.Optional[T.List[str]] = None,
-    descending: T.Optional[T.List[bool]] = None,
-    polars_write_parquet_kwargs: T_OPTIONAL_KWARGS = None,
+    descending: T.Union[bool, T.List[bool]] = False,
     s3pathlib_write_bytes_kwargs: T_OPTIONAL_KWARGS = None,
     logger=dummy_logger,
 ) -> S3Path:
@@ -193,9 +197,10 @@ def process_partition_file_group_manifest_file(
     :param partition_file_group_manifest_file: Manifest file for the partition group.
     :param s3_client: Boto3 S3 client.
     :param s3_loc: S3 location information.
+    :param polars_writer: `polars_writer.Writer <https://github.com/MacHu-GWU/polars_writer-project>`_ object.
+    :param gzip_compress: Flag to enable GZIP compression.
     :param sort_by: List of column names to sort by.
     :param descending: List of boolean values to specify descending order.
-    :param update_at_col: Name of the column used for sorting and updating.
     :param polars_write_parquet_kwargs: Custom keyword arguments for Polars' write_parquet method.
     :param s3pathlib_write_bytes_kwargs: Custom keyword arguments for S3Path's write_bytes method.
     :param logger: logger for logging operations.
@@ -209,7 +214,6 @@ def process_partition_file_group_manifest_file(
 
     # Read all the data file in this manifest, sort by update_at_col
     logger.info(f"Read all staging data files ...")
-    logger.info("and sort by {update_at_col!r} column")
     sub_df_list = list()
     for data_file in partition_file_group_manifest_file.data_file_list:
         uri = data_file[KeyEnum.URI]
@@ -218,24 +222,33 @@ def process_partition_file_group_manifest_file(
         sub_df = read_parquet_from_s3(s3path=s3path, s3_client=s3_client)
         sub_df_list.append(sub_df)
     df = pl.concat(sub_df_list)
-
     if sort_by:
         df = df.sort(by=sort_by, descending=descending)
 
+    # prepare writer parameters
     _relpath = s3dir_partition.relative_to(s3_loc.s3dir_staging_datalake)
     s3dir_datalake_partition = s3_loc.s3dir_datalake.joinpath(_relpath)
-    if polars_write_parquet_kwargs is None:
-        polars_write_parquet_kwargs = dict(compression="snappy")
-    compression = polars_write_parquet_kwargs["compression"]
-    filename = f"{partition_file_group_manifest_file.fingerprint}.{compression}.parquet"
-    s3path = s3dir_datalake_partition.joinpath(filename)
-    logger.info(f"Writ merged files to {s3path.uri} ...")
-    logger.info(f"  preview at: {s3path.console_url}")
-    write_data_file(
-        df=df,
-        s3path=s3path,
-        s3_client=s3_client,
-        polars_write_parquet_kwargs=polars_write_parquet_kwargs,
-        s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
+    if s3pathlib_write_bytes_kwargs is None:
+        s3pathlib_write_bytes_kwargs = {}
+    if polars_writer is None:
+        polars_writer = Writer(
+            format="parquet",
+            parquet_compression="snappy",
+        )
+    fname = partition_file_group_manifest_file.fingerprint
+    # write to datalake
+    logger.info(f"Writ merged files to {s3dir_datalake_partition.uri} ...")
+    logger.info(
+        f"  preview partition folder at: {s3dir_datalake_partition.console_url}"
     )
-    return s3path
+    s3path_new, _, _ = write_to_s3(
+        df=df,
+        s3_client=s3_client,
+        polars_writer=polars_writer,
+        gzip_compress=gzip_compress,
+        s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
+        s3dir=s3dir_datalake_partition,
+        fname=fname,
+    )
+    logger.info(f"  preview s3 file at: {s3path_new.console_url}")
+    return s3path_new

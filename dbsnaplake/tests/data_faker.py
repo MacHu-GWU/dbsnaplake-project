@@ -7,8 +7,9 @@ import numpy as np
 import polars as pl
 from s3pathlib import S3Path
 from s3manifesto.api import KeyEnum
+from polars_writer.api import Writer
 
-from dbsnaplake._import_utils import write_parquet_to_s3
+from dbsnaplake._import_utils import write_to_s3
 from dbsnaplake._import_utils import DBSnapshotManifestFile
 
 
@@ -47,14 +48,16 @@ def generate_db_snapshot_file_data(
         df.iter_slices(n_rows=n_record_per_file),
         start=1,
     ):
-        s3path = s3dir_snapshot.joinpath(f"{ith}.parquet")
-        size, n_record, etag = write_parquet_to_s3(
+        n_record = sub_df.shape[0]
+        s3path_new, size, etag = write_to_s3(
             df=sub_df,
-            s3path=s3path,
             s3_client=s3_client,
+            polars_writer=Writer(format="parquet"),
+            s3dir=s3dir_snapshot,
+            fname=f"{ith}",
         )
         data_file = {
-            KeyEnum.URI: s3path.uri,
+            KeyEnum.URI: s3path_new.uri,
             KeyEnum.ETAG: etag,
             KeyEnum.SIZE: size,
             KeyEnum.N_RECORD: n_record,

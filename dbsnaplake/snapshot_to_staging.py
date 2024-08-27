@@ -30,11 +30,11 @@ try:
 except ImportError:  # pragma: no cover
     pass
 from s3manifesto.api import KeyEnum, ManifestFile
+from polars_writer.api import Writer
 
-from .typehint import T_EXTRACTOR
 from .typehint import T_OPTIONAL_KWARGS
 from .s3_loc import S3Location
-from .polars_utils import write_data_file
+from .polars_utils import write_to_s3
 from .polars_utils import group_by_partition
 from .logger import dummy_logger
 
@@ -188,84 +188,6 @@ T_BatchReadSnapshotDataFileCallable = T.Callable[
 
 
 @dataclasses.dataclass
-class DerivedColumn:
-    """
-    Declares how to derive a new column from the DataFrame.
-
-    :param extractor: A Polars expression or column name to derive the new column.
-        If it is a polars expression, then it will be used to derive the new column.
-        If it is a string, then use the given column, note that this column has to exist.
-    :param alias: The name for the derived column.
-    """
-
-    extractor: T_EXTRACTOR = dataclasses.field()
-    alias: str = dataclasses.field()
-
-
-def add_derived_columns(
-    df: pl.DataFrame,
-    derived_columns: T.List[DerivedColumn],
-) -> pl.DataFrame:
-    """
-    Add new columns to the DataFrame based on the given ``derived_columns`` specifications.
-
-    :return: DataFrame with new columns added.
-
-    **Example**
-
-    >>> import polars as pl
-    >>> df = pl.DataFrame({"id": ["id-1", "id-2", "id-3"]})
-    >>> derived_columns = [
-    ...     DerivedColumn(
-    ...         extractor="id",
-    ...         alias="record_id_1",
-    ...     ),
-    ...     DerivedColumn(
-    ...         extractor=pl.col("id").str.split().list.last(),
-    ...         alias="record_id_2",
-    ...     ),
-    ... ]
-    >>> add_derived_columns(df, derived_columns)
-    ┌──────┬─────────────┬─────────────┐
-    │ id   ┆ record_id_1 ┆ record_id_2 │
-    │ ---  ┆ ---         ┆ ---         │
-    │ str  ┆ str         ┆ str         │
-    ╞══════╪═════════════╪═════════════╡
-    │ id-1 ┆ id-1        ┆ 1           │
-    │ id-2 ┆ id-2        ┆ 2           │
-    │ id-3 ┆ id-3        ┆ 3           │
-    └──────┴─────────────┴─────────────┘
-    """
-    df_schema = df.schema
-    for derived_column in derived_columns:
-        # print(f"--- generate {derived_column.alias!r} column ---")  # for debug only
-        if isinstance(derived_column.extractor, str):
-            if derived_column.extractor not in df_schema:
-                raise ValueError(
-                    f"You plan to extract {derived_column.alias!r} "
-                    f"from {derived_column.extractor!r} column, "
-                    f"however, the column does not exist in the schema."
-                )
-            elif derived_column.extractor != derived_column.alias:
-                df = df.with_columns(
-                    pl.col(derived_column.extractor).alias(derived_column.alias)
-                )
-            else:
-                pass
-        else:
-            if derived_column.alias in df_schema:
-                raise ValueError(
-                    f"You plan to extract {derived_column.alias!r}, "
-                    f"however, the column already exists in the schema."
-                )
-            else:
-                df = df.with_columns(
-                    derived_column.extractor.alias(derived_column.alias)
-                )
-    return df
-
-
-@dataclasses.dataclass
 class StagingFileGroupManifestFile(ManifestFile):
     """
     Represents a group of staging files derived from a single
@@ -299,11 +221,9 @@ def process_db_snapshot_file_group_manifest_file(
     s3_client: "S3Client",
     s3_loc: S3Location,
     batch_read_snapshot_data_file_func: T_BatchReadSnapshotDataFileCallable,
-    extract_record_id: T.Optional[DerivedColumn] = None,
-    extract_create_time: T.Optional[DerivedColumn] = None,
-    extract_update_time: T.Optional[DerivedColumn] = None,
-    extract_partition_keys: T.Optional[T.List[DerivedColumn]] = None,
-    polars_write_parquet_kwargs: T_OPTIONAL_KWARGS = None,
+    partition_keys: T.List[str],
+    sort_by: T.Optional[T.List[str]] = None,
+    descending: T.Union[bool, T.List[bool]] = False,
     s3pathlib_write_bytes_kwargs: T_OPTIONAL_KWARGS = None,
     logger=dummy_logger,
 ) -> StagingFileGroupManifestFile:
@@ -318,10 +238,12 @@ def process_db_snapshot_file_group_manifest_file(
     :param s3_client: Boto3 S3 client.
     :param s3_loc: S3 location information.
     :param batch_read_snapshot_data_file_func:
-    :param extract_record_id: (optional) Specification for deriving record ID.
-    :param extract_create_time: (optional) Specification for deriving creation time.
-    :param extract_update_time: (optional) Specification for deriving update time.
-    :param extract_partition_keys: (optional) Specifications for deriving partition keys.
+    :param partition_keys: partition keys, if you don't have partition keys, then
+        set it to an empty list.
+    :param sort_by: list of columns to sort by. for example: ["create_time"].
+        use empty list or None if no sorting is needed.
+    :param descending: list of boolean values to indicate the sorting order.
+        for example: [True] or [False, True].
     :param polars_write_parquet_kwargs: Custom keyword arguments for Polars' write_parquet method.
         Default is ``dict(compression="snappy")``.
     :param s3pathlib_write_bytes_kwargs: Custom keyword arguments for S3Path's write_bytes method.
@@ -336,43 +258,22 @@ def process_db_snapshot_file_group_manifest_file(
     df = batch_read_snapshot_data_file_func(
         db_snapshot_file_group_manifest_file=db_snapshot_file_group_manifest_file,
     )
-    if extract_partition_keys is None:
-        extract_partition_keys = list()
-    derived_columns = [
-        extract_record_id,
-        extract_create_time,
-        extract_update_time,
-        *extract_partition_keys,
-    ]
-    derived_columns = [col for col in derived_columns if col is not None]
-    if len(derived_columns):
-        df = add_derived_columns(
-            df,
-            [
-                extract_record_id,
-                extract_create_time,
-                extract_update_time,
-                *extract_partition_keys,
-            ],
-        )
     logger.info(f"  Dataframe Shape {df.shape}")
 
     # prepare variables for following operations
-    if polars_write_parquet_kwargs is None:
-        polars_write_parquet_kwargs = dict(compression="snappy")
-    compression = polars_write_parquet_kwargs["compression"]
-    filename = (
-        f"{db_snapshot_file_group_manifest_file.fingerprint}.{compression}.parquet"
+    polars_writer = Writer(
+        format="parquet",
+        parquet_compression="snappy",
     )
+    fname = db_snapshot_file_group_manifest_file.fingerprint
+    basename = f"{fname}.snappy.parquet"
+
     staging_data_file_list = list()
 
     # if we have partition keys, then we group data by partition keys
     # and write them to different partition (1 file per partition)
-    if len(extract_partition_keys):
+    if len(partition_keys):
         logger.info("Group data by partition keys ...")
-        partition_keys = [
-            derived_column.alias for derived_column in extract_partition_keys
-        ]
         # ----------------------------------------------------------------------
         # Method 1, split df into sub_df based on partition keys and
         # write them to different partition (1 file per partition)
@@ -382,21 +283,23 @@ def process_db_snapshot_file_group_manifest_file(
         results = group_by_partition(
             df=df,
             s3dir=s3_loc.s3dir_staging_datalake,
-            filename=filename,
+            filename=basename,
             partition_keys=partition_keys,
-            sort_by=[extract_update_time.alias],
+            sort_by=sort_by,
+            descending=descending,
         )
         logger.info(f"Will write data to {len(results)} partitions ...")
         for ith, (sub_df, s3path) in enumerate(results, start=1):
             logger.info(f"Write to {ith}th partition: {s3path.parent.uri}")
             logger.info(f"  s3uri: {s3path.uri}")
             logger.info(f"  preview at: {s3path.console_url}")
-            size, n_record, etag = write_data_file(
+            n_record = sub_df.shape[0]
+            s3path_new, size, etag = write_to_s3(
                 df=sub_df,
                 s3_client=s3_client,
-                s3path=s3path,
-                polars_write_parquet_kwargs=polars_write_parquet_kwargs,
+                polars_writer=polars_writer,
                 s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
+                s3path=s3path,
             )
             total_size += size
             total_n_record += n_record
@@ -418,20 +321,21 @@ def process_db_snapshot_file_group_manifest_file(
     # if we don't have partition keys, then we write this file to the s3dir_staging
     else:
         logger.info("We don't have partition keys, write to single file ...")
-        s3path = s3_loc.s3dir_staging_datalake.joinpath(filename)
+        s3path = s3_loc.s3dir_staging_datalake.joinpath(basename)
         logger.info(f"Write to: {s3path.uri}")
         logger.info(f"  preview at: {s3path.console_url}")
-        total_size, total_n_record, etag = write_data_file(
+        total_n_record = df.shape[0]
+        s3path_new, total_size, etag = write_to_s3(
             df=df,
             s3_client=s3_client,
-            s3path=s3path,
-            polars_write_parquet_kwargs=polars_write_parquet_kwargs,
+            polars_writer=polars_writer,
             s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
+            s3path=s3path,
         )
         staging_data_file = {
             KeyEnum.URI: s3path.uri,
             KeyEnum.SIZE: total_size,
-            KeyEnum.N_RECORD: total_n_record,
+            KeyEnum.N_RECORD: df.shape[0],
             KeyEnum.ETAG: etag,
         }
         staging_data_file_list.append(staging_data_file)

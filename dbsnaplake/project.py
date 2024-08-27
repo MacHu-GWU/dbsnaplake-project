@@ -55,6 +55,7 @@ import polars as pl
 from pynamodb_mate.api import Connection
 from s3pathlib import S3Path
 from s3manifesto.api import ManifestFile
+from polars_writer.api import Writer
 from .vendor.vislog import VisLog
 
 from .typehint import T_OPTIONAL_KWARGS
@@ -63,7 +64,6 @@ from .s3_loc import S3Location
 from .logger import dummy_logger
 from .snapshot_to_staging import DBSnapshotManifestFile
 from .snapshot_to_staging import DBSnapshotFileGroupManifestFile
-from .snapshot_to_staging import DerivedColumn
 from .snapshot_to_staging import StagingFileGroupManifestFile
 from .snapshot_to_staging import T_BatchReadSnapshotDataFileCallable
 from .snapshot_to_staging import process_db_snapshot_file_group_manifest_file
@@ -141,11 +141,9 @@ def step_1_3_process_db_snapshot_file_group_manifest_file(
     s3_client: "S3Client",
     s3_loc: S3Location,
     batch_read_snapshot_data_file_func: T_BatchReadSnapshotDataFileCallable,
-    extract_record_id: DerivedColumn,
-    extract_create_time: DerivedColumn,
-    extract_update_time: DerivedColumn,
-    extract_partition_keys: T.List[DerivedColumn],
-    polars_write_parquet_kwargs: T_OPTIONAL_KWARGS = None,
+    partition_keys: T.List[str],
+    sort_by: T.Optional[T.List[str]] = None,
+    descending: T.Union[bool, T.List[bool]] = False,
     s3pathlib_write_bytes_kwargs: T_OPTIONAL_KWARGS = None,
     logger=dummy_logger,
 ) -> StagingFileGroupManifestFile:
@@ -158,12 +156,10 @@ def step_1_3_process_db_snapshot_file_group_manifest_file(
         db_snapshot_file_group_manifest_file=db_snapshot_file_group_manifest_file,
         batch_read_snapshot_data_file_func=batch_read_snapshot_data_file_func,
         s3_client=s3_client,
-        extract_record_id=extract_record_id,
-        extract_create_time=extract_create_time,
-        extract_update_time=extract_update_time,
-        extract_partition_keys=extract_partition_keys,
+        partition_keys=partition_keys,
+        sort_by=sort_by,
+        descending=descending,
         s3_loc=s3_loc,
-        polars_write_parquet_kwargs=polars_write_parquet_kwargs,
         s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
         logger=logger,
     )
@@ -209,9 +205,10 @@ def step_2_3_process_partition_file_group_manifest_file(
     partition_file_group_manifest_file: PartitionFileGroupManifestFile,
     s3_client: "S3Client",
     s3_loc: S3Location,
+    polars_writer: T.Optional[Writer] = None,
+    gzip_compress: bool = False,
     sort_by: T.Optional[T.List[str]] = None,
-    descending: T.Optional[T.List[bool]] = None,
-    polars_write_parquet_kwargs: T_OPTIONAL_KWARGS = None,
+    descending: T.Union[bool, T.List[bool]] = False,
     s3pathlib_write_bytes_kwargs: T_OPTIONAL_KWARGS = None,
     logger=dummy_logger,
 ) -> S3Path:
@@ -223,9 +220,10 @@ def step_2_3_process_partition_file_group_manifest_file(
         partition_file_group_manifest_file=partition_file_group_manifest_file,
         s3_client=s3_client,
         s3_loc=s3_loc,
+        polars_writer=polars_writer,
+        gzip_compress=gzip_compress,
         sort_by=sort_by,
         descending=descending,
-        polars_write_parquet_kwargs=polars_write_parquet_kwargs,
         s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
         logger=logger,
     )
@@ -236,14 +234,14 @@ def step_3_1_validate_datalake(
     s3_client: "S3Client",
     s3_loc: S3Location,
     db_snapshot_manifest_file: DBSnapshotManifestFile,
-    column: T.Optional[str] = None,
+    count_column: T.Optional[str] = None,
     logger=dummy_logger,
 ) -> ValidateDatalakeResult:
     return validate_datalake(
         s3_client=s3_client,
         s3_loc=s3_loc,
         db_snapshot_manifest_file=db_snapshot_manifest_file,
-        column=column,
+        count_column=count_column,
         logger=logger,
     )
 
@@ -276,12 +274,13 @@ class Project:
     :param s3uri_staging: S3 URI for storing intermediate staging data.
     :param s3uri_datalake: S3 URI for the final data lake storage.
     :param target_db_snapshot_file_group_size: Target size for DB snapshot file groups.
-    :param extract_record_id: Logic for extracting record IDs.
-    :param extract_create_time: Logic for extracting creation timestamps.
-    :param extract_update_time: Logic for extracting update timestamps.
-    :param extract_partition_keys[DerivedColumn]): Logic for extracting partition keys.
-    :param sort_by: Column names to sort by before writing to parquet.
-    :param descending: Corresponding sort orders (True for descending).
+    :param partition_keys: list of partition keys.
+    :param polars_writer: `polars_writer.Writer <https://github.com/MacHu-GWU/polars_writer-project>`_ object.
+    :param gzip_compress: Flag to enable GZIP compression.
+    :param sort_by: list of columns to sort by. for example: ["create_time"].
+        use empty list or None if no sorting is needed.
+    :param descending: list of boolean values to indicate the sorting order.
+        for example: [True] or [False, True].
     :param target_parquet_file_size: Target size for output parquet files.
     :param tracker_table_name: Name of the DynamoDB table for tracking tasks.
     :param aws_region: AWS region for the DynamoDB tracker table.
@@ -301,14 +300,13 @@ class Project:
     s3uri_staging: str = dataclasses.field()
     s3uri_datalake: str = dataclasses.field()
     target_db_snapshot_file_group_size: int = dataclasses.field()
-    extract_record_id: T.Optional[DerivedColumn] = dataclasses.field()
-    extract_create_time: T.Optional[DerivedColumn] = dataclasses.field()
-    extract_update_time: T.Optional[DerivedColumn] = dataclasses.field()
-    extract_partition_keys: T.Optional[T.List[DerivedColumn]] = dataclasses.field()
-    sort_by: T.List[str] = dataclasses.field()
-    descending: T.List[bool] = dataclasses.field()
+    partition_keys: T.Optional[T.List[str]] = dataclasses.field()
+    sort_by: T.Optional[T.List[str]] = dataclasses.field()
+    descending: T.Union[bool, T.List[bool]] = dataclasses.field()
     target_parquet_file_size: int = dataclasses.field()
-    count_on_column: T.Optional[str] = dataclasses.field()
+    polars_writer: T.Optional[Writer] = dataclasses.field()
+    gzip_compression: bool = dataclasses.field()
+    count_column: T.Optional[str] = dataclasses.field()
     tracker_table_name: str = dataclasses.field()
     aws_region: str = dataclasses.field()
     use_case_id: str = dataclasses.field()
@@ -518,10 +516,9 @@ class Project:
                             s3_client=self.s3_client,
                             s3_loc=self.s3_loc,
                             batch_read_snapshot_data_file_func=self.batch_read_snapshot_data_file,
-                            extract_record_id=self.extract_record_id,
-                            extract_create_time=self.extract_create_time,
-                            extract_update_time=self.extract_update_time,
-                            extract_partition_keys=self.extract_partition_keys,
+                            partition_keys=self.partition_keys,
+                            sort_by=self.sort_by,
+                            descending=self.descending,
                             logger=logger,
                         )
                     )
@@ -601,6 +598,8 @@ class Project:
                         partition_file_group_manifest_file=partition_file_group_manifest_file,
                         s3_client=self.s3_client,
                         s3_loc=self.s3_loc,
+                        polars_writer=self.polars_writer,
+                        gzip_compress=self.gzip_compression,
                         sort_by=self.sort_by,
                         descending=self.descending,
                         logger=logger,
@@ -619,6 +618,6 @@ class Project:
             s3_client=self.s3_client,
             s3_loc=self.s3_loc,
             db_snapshot_manifest_file=self.db_snapshot_manifest_file,
-            column=self.count_on_column,
+            count_column=self.count_column,
             logger=logger,
         )

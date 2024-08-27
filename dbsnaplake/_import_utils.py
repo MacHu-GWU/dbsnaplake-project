@@ -7,7 +7,6 @@ Copy and paste this module to other module while developing.
 from . import constants
 from .typehint import T_RECORD
 from .typehint import T_DF_SCHEMA
-from .typehint import T_EXTRACTOR
 from .typehint import T_OPTIONAL_KWARGS
 from .utils import repr_data_size
 from .s3_loc import S3Location
@@ -16,8 +15,7 @@ from .partition import extract_partition_data
 from .partition import encode_hive_partition
 from .partition import get_s3dir_partition
 from .partition import get_partitions
-from .polars_utils import write_parquet_to_s3
-from .polars_utils import write_data_file
+from .polars_utils import write_to_s3
 from .polars_utils import read_parquet_from_s3
 from .polars_utils import read_many_parquet_from_s3
 from .polars_utils import group_by_partition
@@ -26,7 +24,6 @@ from .compaction import harmonize_schemas
 from .logger import dummy_logger
 from .snapshot_to_staging import DBSnapshotManifestFile
 from .snapshot_to_staging import DBSnapshotFileGroupManifestFile
-from .snapshot_to_staging import DerivedColumn
 from .snapshot_to_staging import StagingFileGroupManifestFile
 from .snapshot_to_staging import T_BatchReadSnapshotDataFileCallable
 from .snapshot_to_staging import process_db_snapshot_file_group_manifest_file

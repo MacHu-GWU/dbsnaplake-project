@@ -70,7 +70,7 @@ def validate_datalake(
     s3_client: "S3Client",
     s3_loc: S3Location,
     db_snapshot_manifest_file: DBSnapshotManifestFile,
-    column: T.Optional[str] = None,
+    count_column: T.Optional[str] = None,
     logger=dummy_logger,
 ) -> ValidateDatalakeResult:
     """
@@ -82,7 +82,7 @@ def validate_datalake(
     :param s3_client: An initialized boto3 S3 client for S3 operations.
     :param s3_loc: S3 location information for the data lake.
     :param db_snapshot_manifest_file: Manifest file of the original database snapshot.
-    :param column: Name of the column used to count the number of records. This
+    :param count_column: Name of the column used to count the number of records. This
         column has to exist in all rows. If not provided, then it will not include
         the record count in the validation result.
 
@@ -124,14 +124,14 @@ def validate_datalake(
     for s3dir_uri, s3path_list in partition_to_file_list_mapping.items():
         s3dir = S3Path.from_s3_uri(s3dir_uri)
         partition_data = extract_partition_data(s3dir_root, s3dir)
-        if column is not None:
+        if count_column is not None:
             n_record = (
                 pl.scan_parquet(
                     [s3path.uri for s3path in s3path_list],
                 )
-                .select(pl.col(column))
+                .select(pl.col(count_column))
                 .count()
-                .collect()[column][0]
+                .collect()[count_column][0]
             )
             after_total_n_record += n_record
         else:
@@ -151,7 +151,7 @@ def validate_datalake(
         logger.info(f"  total_n_record = {partition.total_n_record}")
         partitions.append(partition)
 
-    if column is None:
+    if count_column is None:
         after_total_n_record = None
 
     result = ValidateDatalakeResult(

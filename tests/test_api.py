@@ -11,6 +11,7 @@ def test():
     _ = api.constants.COL_UPDATE_TIME
     _ = api.constants.S3_METADATA_KEY_SIZE
     _ = api.constants.S3_METADATA_KEY_N_RECORD
+    _ = api.constants.S3_METADATA_KEY_N_COLUMN
     _ = api.constants.S3_METADATA_KEY_SNAPSHOT_DATA_FILE
     _ = api.constants.S3_METADATA_KEY_STAGING_PARTITION
     _ = api.constants.MANIFESTS_FOLDER
@@ -22,7 +23,6 @@ def test():
     _ = api.constants.MANIFEST_DATA_FOLDER
     _ = api.T_RECORD
     _ = api.T_DF_SCHEMA
-    _ = api.T_EXTRACTOR
     _ = api.T_OPTIONAL_KWARGS
     _ = api.repr_data_size
     _ = api.S3Location
@@ -31,8 +31,7 @@ def test():
     _ = api.encode_hive_partition
     _ = api.get_s3dir_partition
     _ = api.get_partitions
-    _ = api.write_parquet_to_s3
-    _ = api.write_data_file
+    _ = api.write_to_s3
     _ = api.read_parquet_from_s3
     _ = api.read_many_parquet_from_s3
     _ = api.group_by_partition
@@ -43,7 +42,6 @@ def test():
     _ = api.DBSnapshotManifestFile.split_into_groups
     _ = api.DBSnapshotFileGroupManifestFile
     _ = api.DBSnapshotFileGroupManifestFile.read_all_groups
-    _ = api.DerivedColumn
     _ = api.StagingFileGroupManifestFile
     _ = api.T_BatchReadSnapshotDataFileCallable
     _ = api.process_db_snapshot_file_group_manifest_file
