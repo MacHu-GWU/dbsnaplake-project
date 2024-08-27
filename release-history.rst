@@ -32,6 +32,8 @@ x.y.z (Backlog)
 **Features and Improvements**
 
 - No longer force to use parquet as the datalake format. Now you can use any format that supported by ``polars``.
+- Add support for deltalake format.
+- Allow to skip creating the datalake. This is useful when the user only wants to export the data but not to create the datalake.
 - Add the following public APIs:
     - ``dbsnaplake.api.constants.S3_METADATA_KEY_N_RECORD``
 

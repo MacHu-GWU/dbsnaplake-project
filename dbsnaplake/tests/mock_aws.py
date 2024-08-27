@@ -25,7 +25,11 @@ class BaseMockAwsTest:
             cls.mock_aws = moto.mock_aws()
             cls.mock_aws.start()
 
-        cls.bsm = BotoSesManager(region_name="us-east-1")
+        if cls.use_mock:
+            cls.bsm = BotoSesManager(region_name="us-east-1")
+        else:
+            cls.bsm = BotoSesManager(profile_name="bmt_app_dev_us_east_1", region_name="us-east-1")
+
         cls.bucket = f"{cls.bsm.aws_account_id}-us-east-1-data"
         cls.boto_ses = cls.bsm.boto_ses
         context.attach_boto_session(cls.boto_ses)

@@ -132,7 +132,7 @@ def write_to_s3(
     s3dir: T.Optional[S3Path] = None,
     fname: T.Optional[str] = None,
     s3path: T.Optional[S3Path] = None,
-) -> T.Tuple[S3Path, int, str]:
+) -> T.Tuple[S3Path, T.Optional[int], T.Optional[str]]:
     """
     Write the DataFrame to the given S3Path object, also attach
     additional information related to the dataframe.
@@ -160,27 +160,40 @@ def write_to_s3(
     """
     if s3pathlib_write_bytes_kwargs is None:
         s3pathlib_write_bytes_kwargs = {}
-    buffer = io.BytesIO()
-    polars_writer.write(df, file_args=[buffer])
-    b = buffer.getvalue()
-    if (polars_writer.is_parquet() is False) and gzip_compress:
-        b = gzip.compress(b)
-    ext = configure_s3_write_options(
-        df=df,
-        polars_writer=polars_writer,
-        gzip_compress=gzip_compress,
-        s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
-    )
-    s3path = configure_s3path(
-        s3dir=s3dir,
-        fname=fname,
-        ext=ext,
-        s3path=s3path,
-    )
-    s3path_new = s3path.write_bytes(b, bsm=s3_client, **s3pathlib_write_bytes_kwargs)
-    size = len(b)
-    etag = s3path_new.etag
-    return (s3path_new, size, etag)
+    if (
+        polars_writer.is_csv()
+        or polars_writer.is_json()
+        or polars_writer.is_ndjson()
+        or polars_writer.is_parquet()
+    ):
+        buffer = io.BytesIO()
+        polars_writer.write(df, file_args=[buffer])
+        b = buffer.getvalue()
+        if (polars_writer.is_parquet() is False) and gzip_compress:
+            b = gzip.compress(b)
+        ext = configure_s3_write_options(
+            df=df,
+            polars_writer=polars_writer,
+            gzip_compress=gzip_compress,
+            s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
+        )
+        s3path = configure_s3path(
+            s3dir=s3dir,
+            fname=fname,
+            ext=ext,
+            s3path=s3path,
+        )
+        s3path_new = s3path.write_bytes(
+            b, bsm=s3_client, **s3pathlib_write_bytes_kwargs
+        )
+        size = len(b)
+        etag = s3path_new.etag
+        return (s3path_new, size, etag)
+    else:
+        if s3dir is None:
+            raise ValueError("s3dir must be provided for deltalake formats")
+        polars_writer.write(df, file_args=[s3dir.uri])
+        return (s3dir, None, None)
 
 
 def read_parquet_from_s3(

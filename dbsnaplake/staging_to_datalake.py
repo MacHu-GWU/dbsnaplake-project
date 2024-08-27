@@ -206,6 +206,12 @@ def process_partition_file_group_manifest_file(
     :param logger: logger for logging operations.
 
     :return: S3 path of the compacted file in the data lake.
+
+    .. note::
+
+        This method only support writing data to S3. If your datalake is a
+        datawarehouse / database liked system, you can ingest the data from the
+        s3 datalake to the datawarehouse / database after doing this.
     """
     partition_uri = partition_file_group_manifest_file.details[PARTITION_URI]
     s3dir_partition = S3Path.from_s3_uri(partition_uri)

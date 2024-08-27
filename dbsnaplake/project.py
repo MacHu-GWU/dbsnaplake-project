@@ -277,6 +277,8 @@ class Project:
     :param s3uri_datalake: S3 URI for the final data lake storage.
     :param target_db_snapshot_file_group_size: Target size for DB snapshot file groups.
     :param partition_keys: list of partition keys.
+    :param create_datalake: if False, skip the data lake ingestion step. We end up
+        with a parquet datalake in the staging folder.
     :param polars_writer: `polars_writer.Writer <https://github.com/MacHu-GWU/polars_writer-project>`_ object.
     :param gzip_compress: Flag to enable GZIP compression.
     :param count_column: Name of the column to use for counting records.
@@ -304,6 +306,7 @@ class Project:
     s3uri_datalake: str = dataclasses.field()
     target_db_snapshot_file_group_size: int = dataclasses.field()
     partition_keys: T.Optional[T.List[str]] = dataclasses.field()
+    create_datalake: bool = dataclasses.field()
     sort_by: T.Optional[T.List[str]] = dataclasses.field()
     descending: T.Union[bool, T.List[bool]] = dataclasses.field()
     target_parquet_file_size: int = dataclasses.field()
@@ -316,7 +319,10 @@ class Project:
 
     def __post_init__(self):
         if isinstance(self.polars_writer, Writer) is False:
-            self.polars_writer = Writer(format="parquet", parquet_compression="snappy")
+            self.polars_writer = Writer(
+                format="parquet",
+                parquet_compression="snappy",
+            )
 
     @cached_property
     def s3_loc(self) -> S3Location:
@@ -546,6 +552,8 @@ class Project:
     def step_2_1_plan_staging_to_datalake(
         self,
     ) -> T.List[PartitionFileGroupManifestFile]:
+        if self.create_datalake is False:  # pragma: no cover
+            raise ValueError("no_datalake flag is set to True")
         Task = self.task_model_step_2_1_plan_staging_to_datalake
         task_id = self.s3_loc.s3dir_staging_file_group_manifest.uri
         task = Task.get_one_or_none(task_id=task_id)
@@ -588,6 +596,8 @@ class Project:
         msg="{func_name}",
     )
     def step_2_2_process_partition_file_group_manifest_file(self) -> T.List[S3Path]:
+        if self.create_datalake is False:  # pragma: no cover
+            raise ValueError("no_datalake flag is set to True")
         Task = self.task_model_step_2_2_process_partition_file_group_manifest_file
         task_list = Task.query_for_unfinished(limit=999, auto_refresh=True)
         new_step_2_3_process_partition_file_group_manifest_file = logger.start_and_end(
@@ -621,6 +631,8 @@ class Project:
         msg="{func_name}",
     )
     def step_3_1_validate_datalake(self) -> ValidateDatalakeResult:
+        if self.create_datalake is False:  # pragma: no cover
+            raise ValueError("no_datalake flag is set to True")
         return step_3_1_validate_datalake(
             s3_client=self.s3_client,
             s3_loc=self.s3_loc,
