@@ -14,6 +14,8 @@ import dataclasses
 
 import polars as pl
 from s3pathlib import S3Path
+from polars_writer.api import Writer
+
 from .utils import repr_data_size
 from .s3_loc import S3Location
 from .partition import Partition
@@ -70,6 +72,7 @@ def validate_datalake(
     s3_client: "S3Client",
     s3_loc: S3Location,
     db_snapshot_manifest_file: DBSnapshotManifestFile,
+    polars_writer: T.Optional[Writer] = None,
     count_column: T.Optional[str] = None,
     logger=dummy_logger,
 ) -> ValidateDatalakeResult:
@@ -124,15 +127,50 @@ def validate_datalake(
     for s3dir_uri, s3path_list in partition_to_file_list_mapping.items():
         s3dir = S3Path.from_s3_uri(s3dir_uri)
         partition_data = extract_partition_data(s3dir_root, s3dir)
-        if count_column is not None:
-            n_record = (
-                pl.scan_parquet(
-                    [s3path.uri for s3path in s3path_list],
+        if count_column is not None:  # pragma: no cover
+            if polars_writer is None:  # pragma: no cover
+                raise ValueError(
+                    "polars_writer is required for count n record. "
+                    "it needs to know how did you write, then know how to read."
                 )
-                .select(pl.col(count_column))
-                .count()
-                .collect()[count_column][0]
-            )
+            if polars_writer.is_parquet():
+                n_record = (
+                    pl.scan_parquet(
+                        [s3path.uri for s3path in s3path_list],
+                    )
+                    .select(pl.col(count_column))
+                    .count()
+                    .collect()[count_column][0]
+                )
+            elif polars_writer.is_csv():
+                kwargs = dict()
+                if isinstance(polars_writer.csv_include_header, bool):
+                    kwargs["has_header"] = polars_writer.csv_include_header
+                if isinstance(polars_writer.csv_delimiter, str):
+                    kwargs["separator"] = polars_writer.csv_delimiter
+                if isinstance(polars_writer.csv_quote_char, str):
+                    kwargs["quote_char"] = polars_writer.csv_quote_char
+                n_record = (
+                    pl.scan_csv(
+                        [s3path.uri for s3path in s3path_list],
+                        **kwargs,
+                    )
+                    .select(pl.col(count_column))
+                    .count()
+                    .collect()[count_column][0]
+                )
+            elif polars_writer.is_ndjson():
+                n_record = (
+                    pl.scan_ndjson(
+                        [s3path.uri for s3path in s3path_list],
+                        low_memory=True,
+                    )
+                    .select(pl.col(count_column))
+                    .count()
+                    .collect()[count_column][0]
+                )
+            else:  # pragma: no cover
+                raise NotImplementedError
             after_total_n_record += n_record
         else:
             n_record = None

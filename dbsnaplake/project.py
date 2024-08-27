@@ -234,6 +234,7 @@ def step_3_1_validate_datalake(
     s3_client: "S3Client",
     s3_loc: S3Location,
     db_snapshot_manifest_file: DBSnapshotManifestFile,
+    polars_writer: T.Optional[Writer] = None,
     count_column: T.Optional[str] = None,
     logger=dummy_logger,
 ) -> ValidateDatalakeResult:
@@ -241,6 +242,7 @@ def step_3_1_validate_datalake(
         s3_client=s3_client,
         s3_loc=s3_loc,
         db_snapshot_manifest_file=db_snapshot_manifest_file,
+        polars_writer=polars_writer,
         count_column=count_column,
         logger=logger,
     )
@@ -277,6 +279,7 @@ class Project:
     :param partition_keys: list of partition keys.
     :param polars_writer: `polars_writer.Writer <https://github.com/MacHu-GWU/polars_writer-project>`_ object.
     :param gzip_compress: Flag to enable GZIP compression.
+    :param count_column: Name of the column to use for counting records.
     :param sort_by: list of columns to sort by. for example: ["create_time"].
         use empty list or None if no sorting is needed.
     :param descending: list of boolean values to indicate the sorting order.
@@ -310,6 +313,10 @@ class Project:
     tracker_table_name: str = dataclasses.field()
     aws_region: str = dataclasses.field()
     use_case_id: str = dataclasses.field()
+
+    def __post_init__(self):
+        if isinstance(self.polars_writer, Writer) is False:
+            self.polars_writer = Writer(format="parquet", parquet_compression="snappy")
 
     @cached_property
     def s3_loc(self) -> S3Location:
@@ -618,6 +625,7 @@ class Project:
             s3_client=self.s3_client,
             s3_loc=self.s3_loc,
             db_snapshot_manifest_file=self.db_snapshot_manifest_file,
+            polars_writer=self.polars_writer,
             count_column=self.count_column,
             logger=logger,
         )

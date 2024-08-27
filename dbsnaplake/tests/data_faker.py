@@ -23,6 +23,9 @@ def generate_db_snapshot_file_data(
 ) -> DBSnapshotManifestFile:
     """
     Generate test db snapshot data and manifest file for unit test.
+
+    :param n_db_snapshot_file: total number of file
+    :param n_db_snapshot_record: total number of record in all files
     """
     epoch = datetime(1970, 1, 1)
     start_time = datetime(2021, 1, 1)
