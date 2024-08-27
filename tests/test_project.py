@@ -355,7 +355,7 @@ class BaseTest(BaseMockAwsTest):
 
 
 class TestWithMock(BaseTest):
-    use_mock = False
+    use_mock = True
     n_db_snapshot_file = 20
     n_db_snapshot_record = 1000
     reset_db_snapshot_data = True
