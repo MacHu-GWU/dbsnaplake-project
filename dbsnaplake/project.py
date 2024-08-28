@@ -279,14 +279,14 @@ class Project:
     :param partition_keys: list of partition keys.
     :param create_datalake: if False, skip the data lake ingestion step. We end up
         with a parquet datalake in the staging folder.
-    :param polars_writer: `polars_writer.Writer <https://github.com/MacHu-GWU/polars_writer-project>`_ object.
-    :param gzip_compress: Flag to enable GZIP compression.
-    :param count_column: Name of the column to use for counting records.
     :param sort_by: list of columns to sort by. for example: ["create_time"].
         use empty list or None if no sorting is needed.
     :param descending: list of boolean values to indicate the sorting order.
         for example: [True] or [False, True].
     :param target_parquet_file_size: Target size for output parquet files.
+    :param polars_writer: `polars_writer.Writer <https://github.com/MacHu-GWU/polars_writer-project>`_ object.
+    :param gzip_compress: Flag to enable GZIP compression.
+    :param count_column: Name of the column to use for counting records.
     :param tracker_table_name: Name of the DynamoDB table for tracking tasks.
     :param aws_region: AWS region for the DynamoDB tracker table.
     :param use_case_id: Unique identifier for this specific use case.
