@@ -14,6 +14,7 @@ from s3manifesto.api import KeyEnum, ManifestFile
 from polars_writer.api import Writer
 
 from .typehint import T_OPTIONAL_KWARGS
+from .partition import Partition
 from .s3_loc import S3Location
 from .polars_utils import (
     write_to_s3,
@@ -247,14 +248,30 @@ def process_partition_file_group_manifest_file(
     logger.info(
         f"  preview partition folder at: {s3dir_datalake_partition.console_url}"
     )
-    s3path_new, _, _ = write_to_s3(
-        df=df,
-        s3_client=s3_client,
-        polars_writer=polars_writer,
-        gzip_compress=gzip_compress,
-        s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
-        s3dir=s3dir_datalake_partition,
-        fname=fname,
-    )
-    logger.info(f"  preview s3 file at: {s3path_new.console_url}")
+    if polars_writer.is_delta():
+        if polars_writer.delta_mode != "append":  # pragma: no cover
+            raise ValueError(
+                "For writing initial data to deltalake, the mode has to be 'append'!"
+            )
+        # for delta lake, we need to add partition columns to the dataframe
+        partition = Partition.from_uri(
+            s3uri=s3dir_partition.uri,
+            s3uri_root=s3_loc.s3dir_staging_datalake.uri,
+        )
+        for k, v in partition.data.items():
+            df = df.with_columns(pl.lit(v).alias(k))
+        s3dir_datalake = s3_loc.s3dir_datalake
+        polars_writer.write(df, file_args=[s3dir_datalake.uri])
+        s3path_new = s3dir_datalake_partition
+    else:
+        s3path_new, _, _ = write_to_s3(
+            df=df,
+            s3_client=s3_client,
+            polars_writer=polars_writer,
+            gzip_compress=gzip_compress,
+            s3pathlib_write_bytes_kwargs=s3pathlib_write_bytes_kwargs,
+            s3dir=s3dir_datalake_partition,
+            fname=fname,
+        )
+        logger.info(f"  preview s3 file at: {s3path_new.console_url}")
     return s3path_new
