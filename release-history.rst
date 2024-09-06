@@ -20,6 +20,8 @@ x.y.z (Backlog)
 **Bugfixes**
 
 - Fix a bug that when writing the dataframe to final datalake, it should write to the root S3 folder, not the partition folder.
+- Fix a bug that when dealing without partition, it fail to print the right s3 uri logging.
+- Fix a bug that when validating the datalake in deltalake format, it uses the wrong storage options from the writer.
 
 
 0.3.1 (2024-08-28)

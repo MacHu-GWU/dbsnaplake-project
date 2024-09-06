@@ -142,14 +142,20 @@ def count_records(
         kwargs = dict()
         if polars_writer.storage_options:
             storage_options = dict(polars_writer.storage_options)
-            if "AWS_S3_ALLOW_UNSAFE_RENAME" in storage_options:
-                storage_options.pop("AWS_S3_ALLOW_UNSAFE_RENAME")
-            if "AWS_S3_LOCKING_PROVIDER" in storage_options:
-                storage_options.pop("AWS_S3_LOCKING_PROVIDER")
-            if "DELTA_DYNAMO_TABLE_NAME" in storage_options:
-                storage_options.pop("DELTA_DYNAMO_TABLE_NAME")
-            kwargs["storage_options"] = storage_options
-
+            keys_to_keep = [
+                "aws_access_key_id",
+                "aws_secret_access_key",
+                "aws_region",
+                "aws_default_region",
+                "aws_endpoint",
+                "aws_endpoint_url",
+                "aws_session_token",
+            ]
+            new_storage_options = dict()
+            for key in keys_to_keep:
+                if key in storage_options:
+                    new_storage_options[key] = storage_options[key]
+            kwargs["storage_options"] = new_storage_options
         n_record = (
             pl.scan_parquet(
                 [s3path.uri for s3path in s3path_list],
