@@ -102,7 +102,8 @@ class PartitionFileGroupManifestFile(ManifestFile):
         # group by partition
         df = df.with_columns(
             extract_s3_directory(
-                s3uri_col_name=KeyEnum.URI, s3dir_col_name=PARTITION_URI
+                s3uri_col_name=KeyEnum.URI,
+                s3dir_col_name=PARTITION_URI,
             ),
         )
         partition_file_group_manifest_file_list = list()
@@ -233,8 +234,11 @@ def process_partition_file_group_manifest_file(
         df = df.sort(by=sort_by, descending=descending)
 
     # prepare writer parameters
-    _relpath = s3dir_partition.relative_to(s3_loc.s3dir_staging_datalake)
-    s3dir_datalake_partition = s3_loc.s3dir_datalake.joinpath(_relpath).to_dir()
+    if s3dir_partition.uri == s3_loc.s3dir_staging_datalake.uri:
+        s3dir_datalake_partition = s3_loc.s3dir_datalake
+    else:
+        _relpath = s3dir_partition.relative_to(s3_loc.s3dir_staging_datalake)
+        s3dir_datalake_partition = s3_loc.s3dir_datalake.joinpath(_relpath).to_dir()
     if s3pathlib_write_bytes_kwargs is None:
         s3pathlib_write_bytes_kwargs = {}
     if polars_writer is None:
@@ -244,10 +248,9 @@ def process_partition_file_group_manifest_file(
         )
     fname = partition_file_group_manifest_file.fingerprint
     # write to datalake
-    logger.info(f"Writ merged files to {s3dir_datalake_partition.uri} ...")
-    logger.info(
-        f"  preview partition folder at: {s3dir_datalake_partition.console_url}"
-    )
+    logger.info(f"Write merged files to {s3dir_datalake_partition.uri} ...")
+    console_url = s3dir_datalake_partition.console_url
+    logger.info(f"  preview partition folder at: {console_url}")
     if polars_writer.is_delta():
         if polars_writer.delta_mode != "append":  # pragma: no cover
             raise ValueError(
@@ -273,5 +276,6 @@ def process_partition_file_group_manifest_file(
             s3dir=s3dir_datalake_partition,
             fname=fname,
         )
+        logger.info(f"Write s3 file to {s3path_new.uri} ...")
         logger.info(f"  preview s3 file at: {s3path_new.console_url}")
     return s3path_new
