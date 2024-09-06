@@ -252,9 +252,7 @@ def process_db_snapshot_file_group_manifest_file(
     :return: single :class:`StagingFileGroupManifestFile` object
     """
     # Derive more columns for data lake
-    logger.info(
-        "Derive record_id, create_time, update_time, and partition keys columns ..."
-    )
+    logger.info("batch read snapshot data file  ...")
     df = batch_read_snapshot_data_file_func(
         db_snapshot_file_group_manifest_file=db_snapshot_file_group_manifest_file,
     )

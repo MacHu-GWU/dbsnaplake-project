@@ -234,7 +234,7 @@ def process_partition_file_group_manifest_file(
 
     # prepare writer parameters
     _relpath = s3dir_partition.relative_to(s3_loc.s3dir_staging_datalake)
-    s3dir_datalake_partition = s3_loc.s3dir_datalake.joinpath(_relpath)
+    s3dir_datalake_partition = s3_loc.s3dir_datalake.joinpath(_relpath).to_dir()
     if s3pathlib_write_bytes_kwargs is None:
         s3pathlib_write_bytes_kwargs = {}
     if polars_writer is None:
