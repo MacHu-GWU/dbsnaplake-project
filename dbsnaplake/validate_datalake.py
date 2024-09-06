@@ -144,6 +144,10 @@ def count_records(
             storage_options = dict(polars_writer.storage_options)
             if "AWS_S3_ALLOW_UNSAFE_RENAME" in storage_options:
                 storage_options.pop("AWS_S3_ALLOW_UNSAFE_RENAME")
+            if "AWS_S3_LOCKING_PROVIDER" in storage_options:
+                storage_options.pop("AWS_S3_LOCKING_PROVIDER")
+            if "DELTA_DYNAMO_TABLE_NAME" in storage_options:
+                storage_options.pop("DELTA_DYNAMO_TABLE_NAME")
             kwargs["storage_options"] = storage_options
 
         n_record = (
